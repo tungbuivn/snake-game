@@ -35,6 +35,7 @@ public final class PathPilotTest {
         testReplayRun();
         testWinningRun();
         testSmartVariants();
+        testWinRate100();
 
         System.out.println();
         System.out.println("RESULT: " + passed + " passed, " + failed + " failed");
@@ -482,10 +483,13 @@ public final class PathPilotTest {
     /* 9. Winning run + the three AI toggles                              */
     /* ------------------------------------------------------------------ */
 
-    /** Runs one full cycle game and returns {win, bites, wall, winTick}. */
+    /** Runs one cycle game on any grid and returns {win, bites, wall, winTick}. */
     private static int[] runCycle(AutoPilot pilot, long seed, int steps) {
-        int cols = 20;
-        int rows = 12;
+        return runCycle(pilot, seed, 20, 12, steps);
+    }
+
+    /** Runs one cycle game on any grid and returns {win, bites, wall, winTick}. */
+    private static int[] runCycle(AutoPilot pilot, long seed, int cols, int rows, int steps) {
         int total = cols * rows;
         Random rnd = new Random(seed);
         int[] start = pilot.initialBody(4);
@@ -537,6 +541,57 @@ public final class PathPilotTest {
         return new int[]{winTick >= 0 ? 1 : 0, bites, wall, winTick};
     }
 
+    /**
+     * Win-rate test: EVERY variant must win EVERY run (100%), with no self bite and
+     * no wall death, on 20x12 (240 cells) and on a bigger 20x30 (600 cells) board.
+     */
+    private static void testWinRate100() {
+        int[][] boards = {{20, 12}, {20, 30}};
+        String[] names = {"comb", "snake", "randmerge", "comb+zz"};
+        long[] seeds = new long[20];
+        for (int i = 0; i < seeds.length; i++) {
+            seeds[i] = 1 + i * 7919L;
+        }
+        System.out.println();
+        System.out.println("WIN RATE - 100% required (" + seeds.length + " seeds x 4 variants)");
+        int fails = 0;
+        int bites = 0;
+        int wall = 0;
+        for (int[] b : boards) {
+            for (int v = 0; v < names.length; v++) {
+                int wins = 0;
+                long sum = 0;
+                int max = 0;
+                for (long seed : seeds) {
+                    AutoPilot p = new AutoPilot(b[0], b[1], false, v != 1);
+                    if (v == 2) {
+                        p.reshuffleRandomMerge();
+                    }
+                    if (v == 3) {
+                        p.setZigzag(true);
+                    }
+                    int[] r = runCycle(p, seed, b[0], b[1], 80000);
+                    wins += r[0];
+                    bites += r[1];
+                    wall += r[2];
+                    if (r[0] == 1) {
+                        sum += r[3];
+                        max = Math.max(max, r[3]);
+                    }
+                }
+                System.out.printf("  %-10s %dx%-3d wins=%d/%d  avgWin=%d  maxWin=%d%n",
+                        names[v], b[0], b[1], wins, seeds.length,
+                        wins > 0 ? sum / wins : 0, max);
+                if (wins != seeds.length) {
+                    fails++;
+                }
+            }
+        }
+        System.out.println();
+        check("win rate: 100% of runs fill the board", fails == 0);
+        check("win rate: no self bite in any run", bites == 0);
+        check("win rate: no wall death in any run", wall == 0);
+    }
     private static void testSmartVariants() {
         System.out.println();
         System.out.println("AI TOGGLES (20x12, 240 cells)");

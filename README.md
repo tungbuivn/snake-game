@@ -71,6 +71,11 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
     dựng đều `cycleValid`), rồi chơi lại trên chu trình mới.
   - Test `AI TOGGLES` (20×12): **mọi biến thể vẫn điền kín 240/240, bites=0, wall=0**
     (so sánh `winTick`: comb ≈ 4.3–4.7k, comb+zz ≈ 4.3–4.7k, randmerge ≈ 4.0–4.4k).
+  - Test `WIN RATE` (20 seed × 4 biến thể × 2 cỡ bàn = **160 ván**): **100% thắng**,
+    bites=0, wall=0. Trung bình `winTick`: 20×12 — snake 3.448, randmerge 3.930,
+    comb 4.205; 20×30 — snake 14.236, comb 16.962, randmerge 22.500.
+    Lưu ý: `ZZ` (zig-zag) hiếm khi kích hoạt trong kiểu chạy chu trình (đầu hiếm khi sát
+    đuôi theo ô), nên chưa thấy khác biệt số đo — vẫn giữ làm toggle.
 - **Quả sinh ngẫu nhiên, mỗi quả một lần**: chọn 1 ô trống ngẫu nhiên (trong cung trống
   của chu trình → luôn tới được), **không sinh lại liên tục** nên quả không nhấp nháy.
 - **Cắn thân = một lần chết nhưng không dừng ván**: khi đầu đâm vào thân (mọi chế độ),
