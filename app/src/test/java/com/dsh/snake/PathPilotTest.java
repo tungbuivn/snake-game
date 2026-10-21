@@ -34,6 +34,7 @@ public final class PathPilotTest {
         testFoodReachable();
         testReplayRun();
         testWinningRun();
+        testSmartVariants();
 
         System.out.println();
         System.out.println("RESULT: " + passed + " passed, " + failed + " failed");
@@ -478,17 +479,105 @@ public final class PathPilotTest {
     }
 
     /* ------------------------------------------------------------------ */
-    /* 9. The winning run: fill the whole board without a single bite      */
+    /* 9. Winning run + the three AI toggles                              */
     /* ------------------------------------------------------------------ */
 
+    /** Runs one full cycle game and returns {win, bites, wall, winTick}. */
+    private static int[] runCycle(AutoPilot pilot, long seed, int steps) {
+        int cols = 20;
+        int rows = 12;
+        int total = cols * rows;
+        Random rnd = new Random(seed);
+        int[] start = pilot.initialBody(4);
+        ArrayList<Integer> body = new ArrayList<>();
+        for (int c : start) {
+            body.add(c);
+        }
+        int[] first = pilot.firstDirection(start[0]);
+        int dirX = first[0];
+        int dirY = first[1];
+        int food = pilot.pickFoodCell(toArray(body), rnd);
+        int bites = 0;
+        int wall = 0;
+        int winTick = -1;
+        for (int tick = 0; tick < steps; tick++) {
+            int[] cells = toArray(body);
+            int[] d = pilot.decide(cells, food, dirX, dirY);
+            if (d != null) {
+                dirX = d[0];
+                dirY = d[1];
+            }
+            int head = body.get(0);
+            int chx = head % cols;
+            int chy = head / cols;
+            int nx = chx + dirX;
+            int ny = chy + dirY;
+            if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) {
+                wall = 1;
+                break;
+            }
+            int ni = ny * cols + nx;
+            boolean eats = ni == food;
+            if (!eats) {
+                body.remove(body.size() - 1);
+            }
+            if (body.contains(ni)) {
+                bites = 1;
+                break;
+            }
+            body.add(0, ni);
+            if (eats) {
+                if (body.size() >= total) {
+                    winTick = tick;
+                    break;
+                }
+                food = pilot.pickFoodCell(toArray(body), rnd);
+            }
+        }
+        return new int[]{winTick >= 0 ? 1 : 0, bites, wall, winTick};
+    }
+
+    private static void testSmartVariants() {
+        System.out.println();
+        System.out.println("AI TOGGLES (20x12, 240 cells)");
+        boolean allWon = true;
+        int allBites = 0;
+        int allWall = 0;
+
+        for (long seed : new long[]{424242L, 7L}) {
+            AutoPilot p = new AutoPilot(20, 12, false, true);
+            p.setSmartShortcuts(true);
+            p.setZigzag(true);
+            int[] r = runCycle(p, seed, 40000);
+            System.out.printf("  zigzag   seed=%-7d win=%d bites=%d wall=%d winTick=%d%n",
+                    seed, r[0], r[1], r[2], r[3]);
+            allWon &= r[0] == 1;
+            allBites += r[1];
+            allWall += r[2];
+        }
+
+        for (long seed : new long[]{99L, 2024L}) {
+            AutoPilot p = new AutoPilot(20, 12, false, true);
+            p.setSmartShortcuts(true);
+            p.setZigzag(true);
+            p.reshuffleRandomMerge();
+            int[] r = runCycle(p, seed, 40000);
+            System.out.printf("  randmerge seed=%-7d win=%d bites=%d wall=%d winTick=%d%n",
+                    seed, r[0], r[1], r[2], r[3]);
+            allWon &= r[0] == 1;
+            allBites += r[1];
+            allWall += r[2];
+        }
+        System.out.println();
+
+        check("toggles: every variant still fills the board", allWon);
+        check("toggles: no self bite", allBites == 0);
+        check("toggles: no wall death", allWall == 0);
+    }
+
     /**
-     * Goal for SHORT PATH: on 20x12 (240 cells) the snake must fill the board
-     * without ever biting itself and without hitting a wall. A bite is a "theoretical
-     * loss" (the game only cuts the body and continues), so it fails the test.
-    /**
-     * The winning run for SHORT PATH: it drives the same fixed boustrophedon cycle
-     * as AUTO WIN (what the game now uses), and must fill all 240 cells without a
-     * single bite and without hitting a wall.
+     * The winning run for SHORT PATH: it drives the comb (two-slab) cycle and must
+     * fill all 240 cells without a single bite and without hitting a wall.
      */
     private static void testWinningRun() {
         int cols = 20;

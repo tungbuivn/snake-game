@@ -131,6 +131,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private final RectF padPanel = new RectF();
     private final RectF speedMinusBtn = new RectF();
     private final RectF speedPlusBtn = new RectF();
+    private final RectF smartBtn = new RectF();
+    private final RectF zigBtn = new RectF();
+    private final RectF rndBtn = new RectF();
 
     /* --- manual FOLLOW: walk along the body / follow the tail ---------- */
     private boolean followPicking;
@@ -163,6 +166,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private float hintTop;
     /** Index into SPEEDS: the runner divides the tick interval by it. */
     private int speedIndex = 2;
+    /** AI toggle: safe shortcuts that may leave the Hamiltonian cycle. */
+    private boolean smartShortcuts = true;
+    /** AI toggle: zig-zag detour while the head is next to the tail. */
+    private boolean zigzagOn;
 
     private final ArrayDeque<Integer> body = new ArrayDeque<>();
     private final ArrayDeque<int[]> dirQueue = new ArrayDeque<>();
@@ -809,6 +816,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             pilot = new AutoPilot(COLS, rows, false);
             mangoPilot = new AutoPilot(COLS, rows, true);
             combPilot = new AutoPilot(COLS, rows, false, true);
+            applyAiToggles();
             if (state == STATE_READY) {
                 resetBoardState();
             }
@@ -873,6 +881,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         speedPlusBtn.set(boardRect.right - sp, spBottom - sp, boardRect.right, spBottom);
         speedMinusBtn.set(boardRect.right - 2f * sp - dp(52f), spBottom - sp,
                 boardRect.right - sp - dp(52f), spBottom);
+        // Three AI toggles above the speed buttons: SC (safe shortcuts), ZZ (zig-zag
+        // longer path), RND (rebuild a random Hamiltonian cycle and restart).
+        float tb = dp(30f);
+        float tRight = boardRect.right;
+        float tBottom = spBottom - sp - dp(8f);
+        rndBtn.set(tRight - tb, tBottom - tb, tRight, tBottom);
+        zigBtn.set(tRight - 2f * tb - dp(6f), tBottom - tb, tRight - tb - dp(6f), tBottom);
+        smartBtn.set(tRight - 3f * tb - dp(12f), tBottom - tb,
+                tRight - 2f * tb - dp(12f), tBottom);
 
         rebuildShaders();
         rebuildStatic();
@@ -1062,6 +1079,22 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         // Speed − / + scales the tick interval (1x = the model above). The 16 ms
         // clamp keeps the snake from stepping more than once per rendered frame.
         currentInterval = Math.max(16f, Math.min(220f, currentInterval / speedFactor()));
+    }
+
+    /** Pushes the two AI toggles into every pilot (they are global settings). */
+    private void applyAiToggles() {
+        if (pilot != null) {
+            pilot.setSmartShortcuts(smartShortcuts);
+            pilot.setZigzag(zigzagOn);
+        }
+        if (combPilot != null) {
+            combPilot.setSmartShortcuts(smartShortcuts);
+            combPilot.setZigzag(zigzagOn);
+        }
+        if (mangoPilot != null) {
+            mangoPilot.setSmartShortcuts(smartShortcuts);
+            mangoPilot.setZigzag(zigzagOn);
+        }
     }
 
     /** Current speed multiplier picked with the − / + buttons. */
@@ -2556,6 +2589,18 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + " mangoBtn=" + Math.round(mangoBtn.centerX()) + ","
                     + Math.round(mangoBtn.centerY())
                     + " pause=" + Math.round(pauseCx) + "," + Math.round(pauseCy)
+                    + " spd=" + speedIndex + " sc=" + (smartShortcuts ? 1 : 0)
+                    + " zz=" + (zigzagOn ? 1 : 0)
+                    + " scB=" + Math.round(smartBtn.centerX()) + ","
+                    + Math.round(smartBtn.centerY())
+                    + " zzB=" + Math.round(zigBtn.centerX()) + ","
+                    + Math.round(zigBtn.centerY())
+                    + " rndB=" + Math.round(rndBtn.centerX()) + ","
+                    + Math.round(rndBtn.centerY())
+                    + " spM=" + Math.round(speedMinusBtn.centerX()) + ","
+                    + Math.round(speedMinusBtn.centerY())
+                    + " spP=" + Math.round(speedPlusBtn.centerX()) + ","
+                    + Math.round(speedPlusBtn.centerY())
                     + " resume=" + Math.round(resumeBtn.centerX()) + ","
                     + Math.round(resumeBtn.centerY())
                     + " autoResume=" + Math.round(autoResumeBtn.centerX()) + ","
@@ -2648,6 +2693,34 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         if (speedPlusBtn.contains(x, y)) {
             changeSpeed(1);
+            return;
+        }
+        if (smartBtn.contains(x, y)) {
+            // SC: allow safe shortcuts that leave the Hamiltonian cycle.
+            smartShortcuts = !smartShortcuts;
+            applyAiToggles();
+            haptic(false);
+            return;
+        }
+        if (zigBtn.contains(x, y)) {
+            // ZZ: zig-zag detour while the head is next to the tail.
+            zigzagOn = !zigzagOn;
+            applyAiToggles();
+            haptic(false);
+            return;
+        }
+        if (rndBtn.contains(x, y)) {
+            // RND: rebuild a random Hamiltonian cycle (divide & merge) and restart.
+            AutoPilot p = activePilot();
+            if (p != null) {
+                if (mode == MODE_MANGO) {
+                    p.reshuffleCycle();
+                } else {
+                    p.reshuffleRandomMerge();
+                }
+            }
+            restartGame(mode);
+            haptic(false);
             return;
         }
         switch (state) {
@@ -3569,10 +3642,28 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             drawMoveButton(c);
         }
         drawPauseButton(c);
+        drawAiToggles(c);
         drawSpeedButtons(c);
     }
 
     /** Speed − / + with the current multiplier between them. */
+    /** AI toggles: SC (safe shortcuts), ZZ (zig-zag), RND (new random cycle). */
+    private void drawAiToggles(Canvas c) {
+        drawToggle(c, smartBtn, "SC", smartShortcuts);
+        drawToggle(c, zigBtn, "ZZ", zigzagOn);
+        drawToggle(c, rndBtn, "RND", false);
+    }
+
+    private void drawToggle(Canvas c, RectF r, String label, boolean on) {
+        c.drawRoundRect(r, dp(8f), dp(8f), on ? secondaryFillPaint : padBgPaint);
+        c.drawRoundRect(r, dp(8f), dp(8f), on ? secondaryStrokePaint : pauseStroke);
+        labelPaint.setLetterSpacing(0.02f);
+        labelPaint.setColor(on ? 0xFFB9FFD8 : 0xFF8DA0BF);
+        c.drawText(label, r.centerX(), r.centerY() + dp(3.4f), labelPaint);
+        labelPaint.setLetterSpacing(0.16f);
+        labelPaint.setColor(0xFF8DA0BF);
+    }
+
     private void drawSpeedButtons(Canvas c) {
         drawSecondaryButton(c, speedMinusBtn, "−", false);
         drawSecondaryButton(c, speedPlusBtn, "+", false);

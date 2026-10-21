@@ -52,6 +52,10 @@ final class AutoPilot {
     private final boolean randomizeCycle;
     private final boolean useComb;
     private boolean combBuilt;
+    /** Toggle: allow safe shortcuts that leave the free arc. */
+    private boolean smartShortcuts = true;
+    /** Toggle: insert a detour when the head is right next to the tail. */
+    private boolean zigzagOn;
     private final int[] cycleCell;
     private final int[] cycleIdx;
     private final int[] dist;
@@ -115,6 +119,108 @@ final class AutoPilot {
             cycleIdx[cur] = i;
             cur = next[cur];
         }
+    }
+
+    /** Flattens a direction map into the ordered cell list + index lookup. */
+    private void flattenCycle(int[] next) {
+        int cur = 0;
+        for (int i = 0; i < total; i++) {
+            cycleCell[i] = cur;
+            cycleIdx[cur] = i;
+            cur = next[cur];
+        }
+    }
+
+    /**
+     * Rebuilds the cycle with a random divide-and-merge layout (union-find style:
+     * build a small cycle per strip of rows, then merge neighbouring strips through
+     * 2x2 kernel swaps). Falls back to the plain snake when a merge does not close.
+     */
+    void reshuffleRandomMerge() {
+        int[] next = new int[total];
+        boolean ok = false;
+        for (int attempt = 0; attempt < 8 && !ok; attempt++) {
+            buildRandomStrips(next, 0, rows - 1, new java.util.Random(total * 31L + attempt));
+            ok = cycleValid(next);
+        }
+        if (!ok) {
+            linkStrip(next, 0, rows - 1);
+        }
+        combBuilt = false;
+        flattenCycle(next);
+    }
+
+    /** Splits the row range at a random even point, builds both halves, merges them. */
+    private void buildRandomStrips(int[] next, int y0, int y1, java.util.Random rnd) {
+        int h = y1 - y0 + 1;
+        if (h <= 4) {
+            linkStrip(next, y0, y1);
+            return;
+        }
+        int half = h / 2;
+        int maxCut = Math.max(1, half / 2);
+        int cut = (1 + rnd.nextInt(maxCut)) * 2;   // even strip height
+        int mid = y0 + cut - 1;
+        buildRandomStrips(next, y0, mid, rnd);
+        buildRandomStrips(next, mid + 1, y1, rnd);
+        if (!mergeStrips(next, mid, mid + 1)) {
+            linkStrip(next, y0, y1);
+        }
+    }
+
+    /** Safe-shortcut toggle: allow leaving the free arc when a simulation is safe. */
+    void setSmartShortcuts(boolean v) {
+        smartShortcuts = v;
+    }
+
+    boolean smartShortcuts() {
+        return smartShortcuts;
+    }
+
+    /** Zig-zag toggle: add a detour when the head is right next to the tail. */
+    void setZigzag(boolean v) {
+        zigzagOn = v;
+    }
+
+    boolean zigzagOn() {
+        return zigzagOn;
+    }
+
+    /**
+     * Simulates taking {@code next} and then following the cycle for len + 5 steps,
+     * eating whatever fruit lies on the way. False when the virtual snake would bite
+     * itself - that is what makes an off-cycle shortcut safe to accept.
+     */
+    private boolean safeShortcut(int[] body, int next, int food) {
+        if (body.length < 6) {
+            return false;   // too short for the demo to mean anything; keep the cycle
+        }
+        int len = body.length;
+        int[] sim = new int[len + 8];
+        sim[0] = next;
+        for (int i = 0; i < len - 1; i++) {
+            sim[i + 1] = body[i];
+        }
+        int size = len;
+        int steps = len + 5;
+        for (int t = 0; t < steps; t++) {
+            int head = sim[0];
+            int nx = cycleCell[(cycleIdx[head] + 1) % total];
+            boolean ate = nx == food;
+            int keep = size - (ate ? 0 : 1);
+            if (size + 1 >= sim.length) {
+                return false;
+            }
+            System.arraycopy(sim, 0, sim, 1, keep);
+            sim[0] = nx;
+            size = keep + 1;
+            for (int i = 1; i < size; i++) {
+                if (sim[i] == nx) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /** True when the comb (two-slab) cycle was built instead of the plain snake. */

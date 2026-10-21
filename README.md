@@ -61,6 +61,16 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      split + mend), cùng luật đi an toàn như `AUTO WIN`, quả sinh random trong cung →
      cũng **luôn thắng**. Đo 60s: 62 quả, avg 0.93s, 20 lượt cuối avg 0.60s, max 2.5s,
      100% ≤3s, **0 chết**, không kẹt.
+- **3 tính năng AI thêm (nút `SC` / `ZZ` / `RND`)**, tham khảo các project snake AI:
+  - `SC` **shortcut an toàn** (perfect-snake-challenge): rời chu trình khi rẽ tắt, nhưng
+    chạy **rắn ảo `len + 5` bước** trên bản mô phỏng — không tự cắn thì mới đi; chọn hướng
+    có **cost map** (số bước theo chu trình tới quả) nhỏ nhất.
+  - `ZZ` **longer path / zig-zag** (chuyangliu/snake): khi đầu **sát đuôi** thì chèn bước
+    ngang an toàn để thân có thêm khoảng trống, tránh vòng bám đuôi bí.
+  - `RND` **chu trình ngẫu nhiên** bằng **divide & conquer các dải + merge 2×2** (mỗi lần
+    dựng đều `cycleValid`), rồi chơi lại trên chu trình mới.
+  - Test `AI TOGGLES` (20×12): **mọi biến thể vẫn điền kín 240/240, bites=0, wall=0**
+    (so sánh `winTick`: comb ≈ 4.3–4.7k, comb+zz ≈ 4.3–4.7k, randmerge ≈ 4.0–4.4k).
 - **Quả sinh ngẫu nhiên, mỗi quả một lần**: chọn 1 ô trống ngẫu nhiên (trong cung trống
   của chu trình → luôn tới được), **không sinh lại liên tục** nên quả không nhấp nháy.
 - **Cắn thân = một lần chết nhưng không dừng ván**: khi đầu đâm vào thân (mọi chế độ),
@@ -190,6 +200,7 @@ kín), không bao giờ cắn vào cổ, và in ra bảng từng lần cắn (`t
 | `FOLLOW` (ô dưới-trái của cụm phím) | **Bám đuôi**: bấm 1 lần → *chờ chọn điểm* (chạm lên **một đốt trên thân rắn** để đặt điểm dừng); bấm lần nữa → chạy bám đuôi luôn. Rắn tự tìm đường (BFS) **chạy theo đuôi** và **luôn giữ khoảng cách ≥ 2 ô tới đuôi** (để lúc ăn quả, đuôi có dài ra thêm 1 đốt vẫn còn khoảng an toàn mà bám); dừng khi **đầu tới đúng điểm đã chọn**. Nút đổi thành **`STOP`** khi đang chạy |
 | `MOVE` / `DỪNG` (thanh dưới) | Cho rắn chạy theo route / dừng lại để sửa |
 | `−` / `+` (góc dưới-phải) | **Tốc độ chạy**: mỗi lần bấm đổi 1 nấc `0.5× · 0.75× · 1× · 1.5× · 2× · 3×` (giữa hai nút hiện số hiện tại). Tốc độ chia tick interval nên áp dụng cho **cả chơi tay lẫn AI**, lưu lại cho lần mở sau |
+| `SC` / `ZZ` / `RND` (hàng trên nút tốc độ) | **3 toggle AI**: `SC` = cho phép **shortcut an toàn** rời chu trình (mô phỏng rắn ảo `len+5` bước, không cắn thân thì mới đi — ý tưởng từ [perfect-snake-challenge](https://github.com/LPRowe/perfect-snake-challenge)); `ZZ` = **zig-zag / longer path** khi đầu sát đuôi (ý tưởng từ [chuyangliu/snake](https://github.com/chuyangliu/snake)); `RND` = **dựng lại chu trình Hamilton ngẫu nhiên** (divide-and-merge các dải, có validate) rồi chơi lại. Test `AI TOGGLES` xác nhận cả 3 biến thể vẫn điền kín 240/240, 0 cắn, 0 chết tường |
 | Menu tạm dừng | `TIẾP TỤC` để chạy tiếp; chạm **AUTO WIN / SHORT PATH / MANGO** = **bật lại AI cho đúng ván đang chơi** (giữ điểm) — kể cả khi bạn vừa vuốt/chạm badge để giành quyền điều khiển tay; nếu ván đang ở chế độ khác thì nút đó sẽ chơi lại ở chế độ mới |
 | Vuốt 4 hướng (chế độ AI) | Chuyển sang tự điều khiển (rắn đứng chờ waypoint) |
 | Chạm `CHƠI` / `AUTO WIN` / `SHORT PATH` / `MANGO` | Bắt đầu chế độ tương ứng (4 nút xếp dọc) |
