@@ -188,7 +188,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int[] curCells = new int[0];
     /** Manual planning pause / replay: no step is coming, so the drawing is settled. */
     private boolean planPaused;
-    /** Head rotation in degrees, eased towards the travel direction (no 90 deg snap). */
+    /** Head rotation: from the angle of the last cell move to the angle of this one. */
+    private float headAngleFrom;
+    private float headAngleTo;
+    /** Just the interpolated value used by the drawing (1 tick = one cell of travel). */
     private float headAngleDeg;
     /** Predicted next step (unit direction) so the head can be drawn leading into it. */
     private int nextDx;
@@ -1236,7 +1239,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         curCells = cellsToArray();
         stallTicks = 0;
         hasNext = false;
-        headAngleDeg = (float) Math.toDegrees(Math.atan2(dirY, dirX));
+        headAngleTo = (float) Math.toDegrees(Math.atan2(dirY, dirX));
+        headAngleFrom = headAngleTo;
+        headAngleDeg = headAngleTo;
         score = 0;
         tickAccum = 0f;
         animTime = 0f;
@@ -1387,20 +1392,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void update(float dt) {
         animTime += dt;
-        // Turn the head smoothly: the capsule rotates towards the travel direction
-        // instead of snapping 90 degrees on the frame the direction changes.
-        float targetDeg = (float) Math.toDegrees(Math.atan2(dirY, dirX));
-        float delta = targetDeg - headAngleDeg;
-        while (delta > 180f) {
-            delta -= 360f;
-        }
-        while (delta < -180f) {
-            delta += 360f;
-        }
-        headAngleDeg += delta * Math.min(1f, dt * 14f);
-        if (Math.abs(delta) < 0.4f) {
-            headAngleDeg = targetDeg;
-        }
+
         updateSpeed(dt);
         dumpState();
 
@@ -1663,6 +1655,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         nextDx = dx;
         nextDy = dy;
         hasNext = true;
+        // The capsule turns over exactly one cell move (the tick length), not per frame:
+        // at t=0 it points where the last move went, at t=1 exactly where this one goes.
+        headAngleFrom = wrap180(headAngleDeg);
+        headAngleTo = wrap180((float) Math.toDegrees(Math.atan2(dy, dx)));
     }
 
     /**
@@ -3620,6 +3616,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         return Math.max(0f, Math.min(1f, tickAccum / iv));
     }
 
+    /** Wraps an angle in degrees into (-180, 180]. */
+    private static float wrap180(float deg) {
+        float a = deg % 360f;
+        if (a <= -180f) {
+            a += 360f;
+        } else if (a > 180f) {
+            a -= 360f;
+        }
+        return a;
+    }
+
     private float cellPx(int c) {
         return boardLeft + (c % COLS + 0.5f) * cell;
     }
@@ -3721,6 +3728,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         float t = interpolation();
         float alpha = (state == STATE_DEAD) ? 0.72f : 1f;
+        float angleDelta = headAngleTo - headAngleFrom;
+        while (angleDelta > 180f) {
+            angleDelta -= 360f;
+        }
+        while (angleDelta < -180f) {
+            angleDelta += 360f;
+        }
+        headAngleDeg = wrap180(headAngleFrom + angleDelta * t);
 
         computeDrawnPoints(n, t);
 
