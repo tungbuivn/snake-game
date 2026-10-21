@@ -9,6 +9,7 @@ import android.graphics.DashPathEffect;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.PathMeasure;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.RadialGradient;
@@ -60,6 +61,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private static final String PREFS = "snake_prefs";
     private static final String KEY_HIGH = "high_score";
+    private static final String KEY_SPEED = "speed_index";
+    /** Tick-interval multipliers cycled by the speed − / + buttons. */
+    private static final float[] SPEEDS = {0.5f, 0.75f, 1f, 1.5f, 2f, 3f};
 
     private static final int C_HEAD = 0xFFB9FFD8;
     private static final int C_MID = 0xFF35D07F;
@@ -125,6 +129,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private final RectF padReplayBtn = new RectF();
     private final RectF padFollowBtn = new RectF();
     private final RectF padPanel = new RectF();
+    private final RectF speedMinusBtn = new RectF();
+    private final RectF speedPlusBtn = new RectF();
 
     /* --- manual FOLLOW: walk along the body / follow the tail ---------- */
     private boolean followPicking;
@@ -155,6 +161,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private float hudH;
     private float bottomH;
     private float hintTop;
+    /** Index into SPEEDS: the runner divides the tick interval by it. */
+    private int speedIndex = 2;
 
     private final ArrayDeque<Integer> body = new ArrayDeque<>();
     private final ArrayDeque<int[]> dirQueue = new ArrayDeque<>();
@@ -172,10 +180,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private long lastEatMs;
     private float deadWait;
     private float foodTimer;
-    /** Ticks the current fruit had no path at all (SHORT PATH watchdog). */
-    private int foodStuckTicks;
-    /** Ticks since the last fruit was eaten (SHORT PATH watchdog). */
-    private int noEatTicks;
     private float winWait;
     private float animTime;
     private float deadTime;
@@ -187,7 +191,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int lastAutoMode = -1;
     private AutoPilot pilot;
     private AutoPilot mangoPilot;
-    private PathPilot pathPilot;
 
     private final ArrayList<Particle> particles = new ArrayList<>();
     private final ArrayList<Popup> popups = new ArrayList<>();
@@ -205,6 +208,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private Paint boardStroke;
     private Paint gridPaint;
     private Paint bodyPaint;
+    private Paint bodyShadowPaint;
+    private Paint bodyDarkPaint;
+    private Paint bodyLightPaint;
+    private Paint bodySpecPaint;
+    private Paint bodyPlatePaint;
+    private Paint headSpecPaint;
+    private Paint headChinPaint;
+    private Paint contactShadowPaint;
+    private final PathMeasure bodyMeasure = new PathMeasure();
+    private final float[] measurePos = new float[2];
+    private final float[] measureTan = new float[2];
     private Paint headFillPaint;
     private Paint headOutlinePaint;
     private Paint headGlowPaint;
@@ -293,6 +307,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         highScore = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getInt(KEY_HIGH, 0);
+        speedIndex = Math.max(0, Math.min(SPEEDS.length - 1,
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        .getInt(KEY_SPEED, 2)));
 
         buildPaints();
         resetBoardState();
@@ -304,6 +321,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private float dp(float v) {
         return v * density;
+    }
+
+    /** Round stroke paint used by the body shading passes. */
+    private static Paint tubePaint(int color) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStrokeJoin(Paint.Join.ROUND);
+        p.setColor(color);
+        return p;
     }
 
     private void buildPaints() {
@@ -334,6 +361,24 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         bodyPaint.setStrokeCap(Paint.Cap.ROUND);
         bodyPaint.setStrokeJoin(Paint.Join.ROUND);
         bodyPaint.setColor(C_MID);
+
+        // Translucent passes drawn over the same centre line turn the flat stroke
+        // into a tube: a soft drop shadow, a dark underside, a light top and a thin
+        // specular streak (the light comes from above the board).
+        bodyShadowPaint = tubePaint(0x66000000);
+        bodyDarkPaint = tubePaint(0x00000000);
+        bodyLightPaint = tubePaint(0x00FFFFFF);
+        bodySpecPaint = tubePaint(0x00FFFFFF);
+        bodyPlatePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bodyPlatePaint.setStyle(Paint.Style.STROKE);
+        bodyPlatePaint.setStrokeCap(Paint.Cap.ROUND);
+        bodyPlatePaint.setColor(0xFF000000);
+        headSpecPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        headSpecPaint.setColor(0x66FFFFFF);
+        headChinPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        headChinPaint.setColor(0x40000000);
+        contactShadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        contactShadowPaint.setColor(0x55000000);
 
         headFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         headFillPaint.setStyle(Paint.Style.FILL);
@@ -635,6 +680,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private void applySnakeColor() {
         int c = SNAKE_COLORS[snakeColor % SNAKE_COLORS.length];
         bodyPaint.setColor(c);
+        // Colours of the shading passes: a much darker underside, a lighter top and
+        // a near-white specular streak. The light always comes from the top-left,
+        // which is what makes the flat stroke read as a rounded body.
+        bodyDarkPaint.setColor(mix(c, 0xFF04120B, 0.62f));
+        bodyLightPaint.setColor(mix(c, 0xFFFFFFFF, 0.55f));
+        bodySpecPaint.setColor(mix(c, 0xFFFFFFFF, 0.92f));
+        bodyPlatePaint.setColor(mix(c, 0xFF000000, 0.55f));
         float hr = Math.max(cell * 0.42f, 1f);
         int light = mix(c, 0xFFFFFF, 0.70f);
         int mid = mix(c, 0xFFFFFF, 0.20f);
@@ -754,7 +806,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             // fresh randomized cycle (MangoSnake) on every game.
             pilot = new AutoPilot(COLS, rows, false);
             mangoPilot = new AutoPilot(COLS, rows, true);
-            pathPilot = new PathPilot(COLS, rows);
             if (state == STATE_READY) {
                 resetBoardState();
             }
@@ -812,6 +863,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         // PREVIEW sits under the pad, still inside the control strip.
         float replayTop = padT + padH + dp(8f);
         padReplayBtn.set(padL, replayTop, padL + padW, replayTop + replayH);
+        // Speed − / + sit in the free bottom-right corner of the strip (the pad and
+        // the PREVIEW row are on the left, the MOVE pill and pause above them).
+        float sp = dp(36f);
+        float spBottom = h - dp(6f);
+        speedPlusBtn.set(boardRect.right - sp, spBottom - sp, boardRect.right, spBottom);
+        speedMinusBtn.set(boardRect.right - 2f * sp - dp(52f), spBottom - sp,
+                boardRect.right - sp - dp(52f), spBottom);
 
         rebuildShaders();
         rebuildStatic();
@@ -959,9 +1017,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     /* Simulation                                                         */
     /* ------------------------------------------------------------------ */
 
-    /** The cycle pilot of the current mode (null for manual / short path). */
+    /**
+     * The cycle pilot of the current mode. SHORT PATH now runs the same
+     * boustrophedon cycle as AUTO WIN: it fills the board (0 deaths) instead of
+     * chasing the fruit greedily, which could never be proven to win.
+     */
     private AutoPilot activePilot() {
-        if (mode == MODE_AUTOWIN) {
+        if (mode == MODE_AUTOWIN || mode == MODE_SHORTPATH) {
             return pilot;
         }
         if (mode == MODE_MANGO) {
@@ -981,9 +1043,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         float target = base;
         if (autoMode) {
             int steps = -1;
-            if (mode == MODE_SHORTPATH && pathPilot != null) {
-                steps = pathPilot.getStepsToFood();
-            } else if (activePilot() != null) {
+            if (activePilot() != null) {
                 steps = activePilot().getStepsToFood();
             }
             if (steps > 0) {
@@ -992,6 +1052,26 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             target = Math.max(target, floor);
         }
         currentInterval = Math.max(floor, Math.min(220f, target));
+        // Speed − / + scales the tick interval (1x = the model above). The 16 ms
+        // clamp keeps the snake from stepping more than once per rendered frame.
+        currentInterval = Math.max(16f, Math.min(220f, currentInterval / speedFactor()));
+    }
+
+    /** Current speed multiplier picked with the − / + buttons. */
+    private float speedFactor() {
+        return SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, speedIndex))];
+    }
+
+    /** − / + button: one step slower / faster, persisted for the next launch. */
+    private void changeSpeed(int delta) {
+        int next = Math.max(0, Math.min(SPEEDS.length - 1, speedIndex + delta));
+        if (next == speedIndex) {
+            return;
+        }
+        speedIndex = next;
+        getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putInt(KEY_SPEED, speedIndex).apply();
+        haptic(false);
     }
 
     private float interval() {
@@ -1022,7 +1102,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 dirY = d[1];
             }
         } else {
-            int r = Math.max(ROWS_MIN, rows);
+            int r = Math.max(rows, ROWS_MIN);
             int hx = COLS / 2 + 1;
             int hy = r / 2;
             for (int i = 0; i < 4; i++) {
@@ -1095,7 +1175,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (p != null) {
             return p.getStepsToFood();
         }
-        return pathPilot != null ? pathPilot.getStepsToFood() : -1;
+        return -1;
     }
 
     private void startGame(int newMode) {
@@ -1244,68 +1324,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             dirQueue.clear();
             int[] d = null;
             AutoPilot cycle = activePilot();
-            if (mode == MODE_SHORTPATH && pathPilot != null) {
-                d = pathPilot.decide(cellsToArray(), foodCell, dirX, dirY);
-            } else if (cycle != null) {
-                // Both cycle modes use the classic Hamiltonian walk: forward only,
-                // inside the free arc between the head and the tail.
+            if (cycle != null) {
+                // Every AI mode walks the classic Hamiltonian cycle: forward only,
+                // inside the free arc between the head and the tail. SHORT PATH uses
+                // the fixed boustrophedon cycle too, so it fills the board (a win)
+                // instead of chasing the fruit and trapping itself.
                 d = cycle.decide(cellsToArray(), foodCell, dirX, dirY);
-            }
-            if (mode == MODE_SHORTPATH && pathPilot != null) {
-                // Watchdog: an unplannable fruit, or a fruit the snake keeps circling
-                // without ever eating it, would loop for ever (and the old build did
-                // exactly that). Bring the fruit to a cell it can reach right away.
-                if (pathPilot.getStepsToFood() < 0) {
-                    foodStuckTicks++;
-                } else {
-                    foodStuckTicks = 0;
-                }
-                if (foodStuckTicks == 0) {
-                    noEatTicks++;
-                }
-                if (foodStuckTicks > 40 || noEatTicks > 100) {
-                    rescueFruit();
-                    foodStuckTicks = 0;
-                    noEatTicks = 0;
-                }
             }
             if (d != null) {
                 dirX = d[0];
                 dirY = d[1];
-            } else if (pathPilot != null && mode == MODE_SHORTPATH) {
-                // The planner could not decide: never keep a stale direction, that
-                // is exactly how the snake would bite itself.
-                int[] alt = pathPilot.fallbackDirection(cellsToArray());
-                if (alt != null) {
-                    dirX = alt[0];
-                    dirY = alt[1];
-                }
-            }
-            // SHORT PATH: if the chosen step leaves the board, turn to another
-            // free direction instead of dying. Biting the body is fine (it is
-            // cut off), walls are not.
-            if (mode == MODE_SHORTPATH && pathPilot != null) {
-                Integer headPeek = body.peekFirst();
-                if (headPeek != null) {
-                    int hx = headPeek % COLS;
-                    int hy = headPeek / COLS;
-                    int qx = hx + dirX;
-                    int qy = hy + dirY;
-                    if (qx < 0 || qx >= COLS || qy < 0 || qy >= rows) {
-                        int[] alt = pathPilot.fallbackDirection(cellsToArray());
-                        if (alt != null) {
-                            dirX = alt[0];
-                            dirY = alt[1];
-                        } else {
-                            // Nothing free at all: any on-board step beats a wall.
-                            for (int k = 0; k < 4 && (hx + dirX < 0 || hx + dirX >= COLS
-                                    || hy + dirY < 0 || hy + dirY >= rows); k++) {
-                                dirX = NEIGH[k][0];
-                                dirY = NEIGH[k][1];
-                            }
-                        }
-                    }
-                }
             }
             // Safety net (cycle modes only): if the chosen step would hit a wall
             // or the body, take the roomiest free neighbour instead of dying.
@@ -1375,7 +1403,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             logLine("BITE dir=" + dirX + "," + dirY + " head=" + hx + "," + hy
                     + " hit=" + nx + "," + ny + " len=" + body.size()
                     + " food=" + foodCell
-                    + " branch=" + (pathPilot != null ? pathPilot.lastBranch() : "-"));
+                    + " branch=" + mode);
             biteSelf(ni);
             registerDeath("bite");
             spawnDeathFx(nx, ny);
@@ -1386,7 +1414,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         if (eats) {
             score += 10;
-            noEatTicks = 0;
             if (score > highScore) {
                 highScore = score;
             }
@@ -2313,8 +2340,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void spawnFood() {
         foodTimer = 0f;
-        foodStuckTicks = 0;
-        noEatTicks = 0;
         int total = COLS * Math.max(rows, ROWS_MIN);
         int free = total - body.size();
         if (free <= 0) {
@@ -2354,64 +2379,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         int pick = randomFreeCell(total);
         if (pick >= 0) {
             foodCell = pick;
-            fixFoodReachability();
             return;
         }
         foodCell = 0;
-        fixFoodReachability();
     }
-
-    /**
-     * Brings a fruit the planner keeps circling to the nearest cell the head can
-     * actually reach, so the run always keeps eating. When the head is fully walled
-     * in by its own body, the fruit goes on the tail cell - the only cell left that
-     * the head can still walk into.
-     */
-    private void rescueFruit() {
-        if (pathPilot == null || mode != MODE_SHORTPATH || body.isEmpty()) {
-            return;
-        }
-        int[] cellsNow = cellsToArray();
-        int c = pathPilot.nearestFreeCell(cellsNow);
-        if (c < 0) {
-            int tailCell = cellsNow[cellsNow.length - 1];
-            if (tailCell != cellsNow[0]) {
-                c = tailCell;
-            }
-        }
-        if (c >= 0 && c != foodCell && c != cellsNow[0]) {
-            foodCell = c;
-            foodTimer = 0f;
-        }
-    }
-
-    /**
-     * SHORT PATH must never leave an uneatable fruit: if the head cannot reach it,
-     * move it into the reachable pocket; when the snake has sealed itself in
-     * completely (the head has no free neighbour at all) drop it on the tail cell -
-     * the only cell left that the head can still walk into.
-     */
-    private void fixFoodReachability() {
-        if (pathPilot == null || mode != MODE_SHORTPATH || foodCell < 0 || body.isEmpty()) {
-            return;
-        }
-        int[] cellsNow = cellsToArray();
-        if (pathPilot.foodReachable(cellsNow, foodCell)) {
-            return;
-        }
-        int c = pathPilot.reachableFreeCell(cellsNow, rnd);
-        if (c < 0) {
-            int tailCell = cellsNow[cellsNow.length - 1];
-            if (tailCell != cellsNow[0]) {
-                c = tailCell;
-            }
-        }
-        if (c >= 0 && c != foodCell && c != cellsNow[0]) {
-            foodCell = c;
-            foodTimer = 0f;
-        }
-    }
-
     /** Uniformly random empty cell, -1 when the board is full. */
     private int randomFreeCell(int total) {
         int free = total - body.size();
@@ -2556,7 +2527,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + " padReplay=" + Math.round(padReplayBtn.centerX()) + ","
                     + Math.round(padReplayBtn.centerY())
                     + " coll=" + routeCollisions().size()
-                    + " stuck=" + (pathPilot != null ? pathPilot.stuckTicks() : -1)
+                    + " stuck=0"
                     + " gap=" + (body.size() > 1 ? distFromTail()[body.peekFirst()] : -1)
                     + " list=" + (wpListOpen ? 1 : 0)
                     + " follow=" + (following ? 1 : 0) + "/" + (followPicking ? 1 : 0)
@@ -2663,6 +2634,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void onTap(float x, float y) {
+        // Speed − / + work in every state; they never touch the run itself.
+        if (speedMinusBtn.contains(x, y)) {
+            changeSpeed(-1);
+            return;
+        }
+        if (speedPlusBtn.contains(x, y)) {
+            changeSpeed(1);
+            return;
+        }
         switch (state) {
             case STATE_READY:
                 if (autoBtn.contains(x, y)) {
@@ -3313,17 +3293,74 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         computeDrawnPoints(n, t);
 
-        // One flat-coloured stroke through the body points. The middle cells do
-        // not move during a tick, so a bend keeps exactly the same shape from
-        // frame to frame; the round join keeps its thickness equal to the body.
+        // Six passes over one centre line fake a lit tube: drop shadow, base
+        // colour, dark underside, light top, specular streak and scale plates.
         if (drawnCount >= 2) {
             buildCentrePath();
+            float bw = cell * 0.60f;
+
+            bodyShadowPaint.setStrokeWidth(bw + dp(2.6f));
+            bodyShadowPaint.setAlpha((int) (0x4D * alpha));
+            c.save();
+            c.translate(dp(1.6f), dp(2.6f));
+            c.drawPath(bodyPath, bodyShadowPaint);
+            c.restore();
+
             bodyPaint.setAlpha((int) (255 * alpha));
-            bodyPaint.setStrokeWidth(cell * 0.60f);
+            bodyPaint.setStrokeWidth(bw);
             c.drawPath(bodyPath, bodyPaint);
+
+            bodyDarkPaint.setStrokeWidth(bw * 0.66f);
+            bodyDarkPaint.setAlpha((int) (0x7A * alpha));
+            c.save();
+            c.translate(0f, bw * 0.19f);
+            c.drawPath(bodyPath, bodyDarkPaint);
+            c.restore();
+
+            bodyLightPaint.setStrokeWidth(bw * 0.36f);
+            bodyLightPaint.setAlpha((int) (0x5E * alpha));
+            c.save();
+            c.translate(0f, -bw * 0.18f);
+            c.drawPath(bodyPath, bodyLightPaint);
+            c.restore();
+
+            bodySpecPaint.setStrokeWidth(Math.max(dp(1.4f), bw * 0.13f));
+            bodySpecPaint.setAlpha((int) (0x4C * alpha));
+            c.save();
+            c.translate(-bw * 0.03f, -bw * 0.25f);
+            c.drawPath(bodyPath, bodySpecPaint);
+            c.restore();
+
+            drawBodyScales(c, alpha, bw);
         }
 
         drawHead(c, drawnPts[0], drawnPts[1], alpha);
+    }
+
+    /**
+     * Short rib lines across the body (belly plates): they are what reads as
+     * "scales" at this size and they break the plastic look of a flat stroke.
+     */
+    private void drawBodyScales(Canvas c, float alpha, float bw) {
+        bodyMeasure.setPath(bodyPath, false);
+        float len = bodyMeasure.getLength();
+        if (len <= dp(6f)) {
+            return;
+        }
+        float step = Math.max(cell * 0.42f, len / 90f);
+        bodyPlatePaint.setAlpha((int) (0x26 * alpha));
+        bodyPlatePaint.setStrokeWidth(Math.max(dp(1f), bw * 0.09f));
+        for (float d = step; d < len - step * 0.5f; d += step) {
+            if (!bodyMeasure.getPosTan(d, measurePos, measureTan)) {
+                return;
+            }
+            float tx = measureTan[0];
+            float ty = measureTan[1];
+            float nx = -ty * bw * 0.30f;
+            float ny = tx * bw * 0.30f;
+            c.drawLine(measurePos[0] - nx, measurePos[1] - ny,
+                    measurePos[0] + nx, measurePos[1] + ny, bodyPlatePaint);
+        }
     }
 
     /** Polyline through the drawn points; ROUND join bends the corners. */
@@ -3345,6 +3382,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         c.save();
         // Centred exactly on the head cell (no forward shift, no tongue).
         c.translate(hx, hy);
+        // Contact shadow first, in screen space, so it shows the head is lifted off
+        // the board (the light comes from the top-left).
+        contactShadowPaint.setAlpha((int) (0x4D * alpha));
+        tmpRect.set(-hl + dp(1.6f), -hw + dp(2.4f), hl + dp(1.6f), hw + dp(2.4f));
+        c.drawRoundRect(tmpRect, hw, hw, contactShadowPaint);
         c.rotate(angle);
 
         headGlowPaint.setAlpha((int) (255 * alpha));
@@ -3357,6 +3399,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         tmpRect.set(-hl, -hw, hl, hw);
         headFillPaint.setAlpha((int) (255 * alpha));
         c.drawRoundRect(tmpRect, hw, hw, headFillPaint);
+
+        // Rounded shading: darker chin, glossy top-left, so the capsule reads as a
+        // rounded volume instead of a flat sticker.
+        headChinPaint.setAlpha((int) (0x3A * alpha));
+        tmpRect.set(-hl * 0.94f, hw * 0.18f, hl * 0.94f, hw * 0.96f);
+        c.drawRoundRect(tmpRect, hw * 0.5f, hw * 0.5f, headChinPaint);
+        headSpecPaint.setAlpha((int) (0x55 * alpha));
+        tmpRect.set(-hl * 0.66f, -hw * 0.82f, hl * 0.22f, -hw * 0.22f);
+        c.drawRoundRect(tmpRect, hw * 0.4f, hw * 0.4f, headSpecPaint);
 
         for (int s = -1; s <= 1; s += 2) {
             float ex = hl * 0.30f;
@@ -3511,6 +3562,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             drawMoveButton(c);
         }
         drawPauseButton(c);
+        drawSpeedButtons(c);
+    }
+
+    /** Speed − / + with the current multiplier between them. */
+    private void drawSpeedButtons(Canvas c) {
+        drawSecondaryButton(c, speedMinusBtn, "−", false);
+        drawSecondaryButton(c, speedPlusBtn, "+", false);
+        String label = String.format(java.util.Locale.US, "%.1f×", speedFactor());
+        float ls = labelPaint.getLetterSpacing();
+        labelPaint.setLetterSpacing(0.02f);
+        labelPaint.setColor(0xFFB9FFD8);
+        c.drawText(label, (speedMinusBtn.right + speedPlusBtn.left) / 2f,
+                speedMinusBtn.centerY() + dp(3.6f), labelPaint);
+        labelPaint.setLetterSpacing(ls);
+        labelPaint.setColor(0xFF8DA0BF);
     }
 
     private void drawPauseButton(Canvas c) {

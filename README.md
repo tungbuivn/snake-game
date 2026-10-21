@@ -42,20 +42,19 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      bấm `STOP` để dừng tay).
   2. `AUTO WIN` — **một** chu trình Hamilton **cố định** phủ toàn board (boustrophedon),
      luôn thắng, 0 chết.
-  3. `SHORT PATH` — **ăn quả nhưng phải còn đường bám đuôi**:
-     1. BFS đường ngắn nhất tới quả; **bước kế tiếp** và **trạng thái sau khi ăn** (rắn ảo
-        dài thêm 1 đốt) đều phải **còn đường tới đuôi** + **vùng trống đủ chỗ cho cả thân**
-        → chỉ khi qua cả hai mới đi.
-     2. Không qua thì thử lại với đường "dài" (zig-zag 2 ô). Vẫn không qua thì **không ăn
-        vội**: cứ **bám đuôi** (đường zig-zag tới đuôi — luôn an toàn) cho tới khi tìm được
-        phương án ăn an toàn khác.
-     3. Cuối cùng: chọn ô trống giữ được đường tới đuôi với nhiều không gian nhất.
-     Quả sinh **random**; nếu vẫn bị dồn vào thế bí thì cắt đuôi và chạy tiếp.
-     **Chống lặp vô tận**: nếu quả **không có đường tới** (bị thân bịt kín) quá 40 tick,
-     hoặc **quá 100 tick chưa ăn được quả** (rắn cứ vòng quanh), quả được **dời tới ô gần
-     nhất mà đầu rắn tới được** (nếu đầu bị bịt kín hoàn toàn thì đặt ngay ô đuôi) — nên
-     ván luôn ăn tiếp được, không bao giờ quay vòng mãi. Đâm tường cũng bị chặn: hết đường
-     thì rắn cắn thân (bị cắt ngắn) chứ không chết vì tường.
+  3. `SHORT PATH` — **chu trình Hamilton boustrophedon cố định** (cùng engine với `AUTO WIN`):
+     1. Mỗi tick rắn chỉ đi **tiến trên chu trình**, trong **cung trống giữa đầu và đuôi**;
+        quả sinh trong cung đó nên **luôn tới được** và **không bao giờ bị dời**.
+     2. Trong cung, rắn đi **đường BFS ngắn nhất tới quả** (tắt đường trên chu trình) thay
+        vì bò từng ô → ăn nhanh hơn.
+     3. Thân luôn là một **đoạn liền trên chu trình** và chỉ dài thêm khi ăn, nên cung trống
+        co dần đều → **điền kín 240/240 ô** = **thắng**, **0 cắn thân, 0 đâm tường**.
+     Test `WIN RUN` xác nhận: **2 seed × 240/240 ô**, `winTick ≈ 3.4–3.8k` tick (~0,9 s/quả),
+     `bites=0`, `wall=0`.
+     **Vì sao bỏ greedy**: greedy "đường ngắn nhất + bám đuôi" đo được 645 quả/12k tick
+     nhưng **tự bịt túi** rồi phải cắn thân (19–38 lần/ván) — không thể chứng minh thắng.
+     Spiral/lawnmower dựng động cũng đã thử: spiral là **đường hở**, không khép vòng được
+     nên không điền kín bàn (chỉ đạt 10–13/240 ô).
   4. `MANGO` — bản MangoSnake: **mỗi ván một chu trình Hamilton ngẫu nhiên** (250 lượt
      split + mend), cùng luật đi an toàn như `AUTO WIN`, quả sinh random trong cung →
      cũng **luôn thắng**. Đo 60s: 62 quả, avg 0.93s, 20 lượt cuối avg 0.60s, max 2.5s,
@@ -93,16 +92,22 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
 - **Chiến thắng**: khi không còn ô trống để sinh quả (rắn phủ kín board), game vào
   trạng thái **CHIẾN THẮNG** (thẻ vàng, điểm cuối). Watch-mode tự chơi lại sau 4s.
   Đo trên máy: rắn đạt **800/800 đốt** sau 300s, `state=4`.
-- **Rắn vẽ tối giản**: thân đứng yên trong mỗi tick — chỉ **đầu duỗi ra** ô kế tiếp và
-  **đuôi thụt vào**; mọi điểm giữa nằm đúng tâm ô nên **hình học khúc cua cố định,
-  vẽ một lần là không thể gợn/phập phồng**. Đường tâm là polyline, khớp cua do
-  **ROUND join** tự bo bán kính = nửa bề rộng (không bo tay) nên bề dày luôn hằng số;
-  **thân là MỘT nét vẽ màu phẳng** (`#35D07F`, không gradient/không vảy/không viền) →
-  chỉ 1 lệnh vẽ cho cả thân; đầu là capsule to hơn thân (0.88×cell) có gradient, mắt
-  (đồng tử + ánh sáng), lỗ mũi, mắt X khi thua — **không vẽ lưỡi**. Đầu **nội suy mượt**
-  từ ô cũ sang ô mới y như thân (nhờ vậy chế độ chậm không còn giật từng ô), **riêng
-  tick ăn quả** thì đặt ngay vào tâm ô quả (nên đầu nằm đúng ô quả vừa ăn, không bị
-  tụt lại 1 ô); mũi đuôi cũng nội suy mượt. Đuôi bo tròn đúng bằng bề rộng thân.
+- **Rắn vẽ tối giản nhưng có khối 3D**: thân đứng yên trong mỗi tick — chỉ **đầu duỗi ra** ô
+  kế tiếp và **đuôi thụt vào**; mọi điểm giữa nằm đúng tâm ô nên **hình học khúc cua cố
+  định, vẽ một lần là không thể gợn/phập phồng**. Đường tâm là polyline, khớp cua do
+  **ROUND join** tự bo bán kính = nửa bề rộng (không bo tay) nên bề dày luôn hằng số.
+  Trên cùng một đường tâm đó vẽ **5 lớp** để thành ống trụ có chiếu sáng từ trên:
+  1. **bóng đổ** mềm (đen alpha thấp, lệch +1.6/+2.6dp, rộng hơn thân),
+  2. **màu nền** (`#35D07F`),
+  3. **mặt dưới tối** (màu trộn đen 62%, dày 0.66×thân, lệch xuống 0.19×thân),
+  4. **mặt trên sáng** (trộn trắng 55%, dày 0.36×thân, lệch lên 0.18×thân),
+  5. **vạch vảy** bằng `PathMeasure` (dài tối đa 90 vạch, alpha rất thấp).
+  Đầu là capsule to hơn thân (0.88×cell) có gradient, **bóng đổ dưới đầu + bóng cằm +
+  vệt bóng bóng (specular)**, mắt (đồng tử + ánh sáng), lỗ mũi, mắt X khi thua — **không
+  vẽ lưỡi**. Đầu **nội suy mượt** từ ô cũ sang ô mới y như thân (nhờ vậy chế độ chậm không
+  còn giật từng ô), **riêng tick ăn quả** thì đặt ngay vào tâm ô quả (nên đầu nằm đúng ô
+  quả vừa ăn, không bị tụt lại 1 ô); mũi đuôi cũng nội suy mượt. Đuôi bo tròn đúng bằng
+  bề rộng thân.
 - HUD: pill `ĐIỂM` / `KỶ LỤC` cao 52dp, nhãn và số tách nhau ~7dp (không dính).
 - Mồi táo có quầng sáng, nhấp nháy; hạt hiệu ứng khi ăn; điểm `+10` bay lên.
 - Điểm số + kỷ lục lưu `SharedPreferences`, tạm dừng/tiếp tục, overlay kết thúc,
@@ -148,6 +153,19 @@ Quy trình trong `build.ps1`:
 APK: `build/snake-2d.apk` (~53 KB, ký bằng debug key — cài trực tiếp được, nhưng nếu
 muốn phát hành chính thức trên Play Store thì thay keystore riêng).
 
+### Unit test (không cần JUnit)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\test.ps1
+```
+
+`tools\test.ps1` biên dịch `app/src/test/java/**` cùng `PathPilot.java` rồi chạy
+`com.dsh.snake.PathPilotTest` (25 case: hướng đi, không quay đầu, đuôi trùng ô đầu, đầu bị
+bịt kín, sát tường, cứu quả) và cuối cùng **chạy lại 20.000 tick** luật `SHORT PATH` để kiểm
+tra: **0 chết vì tường**, mỗi lần cắn thân chỉ xảy ra khi **không còn đường tới quả** (túi
+kín), không bao giờ cắn vào cổ, và in ra bảng từng lần cắn (`tick`, `len trước → sau`,
+`branch`) để soi nguyên nhân.
+
 > Lưu ý khi sửa file có tiếng Việt: phải đọc/ghi UTF-8. Dùng
 > `Get-Content -Raw -Encoding utf8` + `Set-Content -Encoding utf8` (hoặc công cụ
 > soạn thảo hỗ trợ UTF-8). Nếu đọc bằng encoding mặc định (ANSI) rồi ghi lại, toàn
@@ -169,6 +187,7 @@ muốn phát hành chính thức trên Play Store thì thay keystore riêng).
 | `PREVIEW (n)` (dưới cụm phím) | **Playback route hiện tại như video**: rắn thật **đứng yên**, một bóng rắn **xanh cyan** bò lại đúng các waypoint **đang có** (không lưu lịch sử cũ), có nhãn `PREVIEW i / n`; nút đổi thành **`THOÁT PREVIEW`** — bấm lần nữa hoặc chạm bất kỳ đâu là thoát và **chơi tiếp** đúng chỗ đang đứng |
 | `FOLLOW` (ô dưới-trái của cụm phím) | **Bám đuôi**: bấm 1 lần → *chờ chọn điểm* (chạm lên **một đốt trên thân rắn** để đặt điểm dừng); bấm lần nữa → chạy bám đuôi luôn. Rắn tự tìm đường (BFS) **chạy theo đuôi** và **luôn giữ khoảng cách ≥ 2 ô tới đuôi** (để lúc ăn quả, đuôi có dài ra thêm 1 đốt vẫn còn khoảng an toàn mà bám); dừng khi **đầu tới đúng điểm đã chọn**. Nút đổi thành **`STOP`** khi đang chạy |
 | `MOVE` / `DỪNG` (thanh dưới) | Cho rắn chạy theo route / dừng lại để sửa |
+| `−` / `+` (góc dưới-phải) | **Tốc độ chạy**: mỗi lần bấm đổi 1 nấc `0.5× · 0.75× · 1× · 1.5× · 2× · 3×` (giữa hai nút hiện số hiện tại). Tốc độ chia tick interval nên áp dụng cho **cả chơi tay lẫn AI**, lưu lại cho lần mở sau |
 | Menu tạm dừng | `TIẾP TỤC` để chạy tiếp; chạm **AUTO WIN / SHORT PATH / MANGO** = **bật lại AI cho đúng ván đang chơi** (giữ điểm) — kể cả khi bạn vừa vuốt/chạm badge để giành quyền điều khiển tay; nếu ván đang ở chế độ khác thì nút đó sẽ chơi lại ở chế độ mới |
 | Vuốt 4 hướng (chế độ AI) | Chuyển sang tự điều khiển (rắn đứng chờ waypoint) |
 | Chạm `CHƠI` / `AUTO WIN` / `SHORT PATH` / `MANGO` | Bắt đầu chế độ tương ứng (4 nút xếp dọc) |
