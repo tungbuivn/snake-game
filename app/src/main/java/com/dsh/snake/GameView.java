@@ -888,8 +888,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         zigBtn.set(tRight - 2f * tb - dp(6f), tBottom - tb, tRight - tb - dp(6f), tBottom);
         smartBtn.set(tRight - 3f * tb - dp(12f), tBottom - tb,
                 tRight - 2f * tb - dp(12f), tBottom);
-        resetBtn.set(tRight - 4f * tb - dp(18f), tBottom - tb,
-                tRight - 3f * tb - dp(18f), tBottom);
+        resetBtn.setEmpty();   // restart lives in the pause menu now
 
         rebuildShaders();
         rebuildStatic();
@@ -1075,6 +1074,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     /** Pushes the two AI toggles into every pilot (they are global settings). */
+    /**
+     * Restart the run in the current mode, with whatever the toggles currently say
+     * (used by the pause menu's CHƠI LẠI button).
+     */
+    private void restartRun() {
+        if (randomCycleOn && randomPilot != null && mode == MODE_AUTO) {
+            randomPilot.reshuffleRandomMerge();
+        }
+        applyAiToggles();
+        restartGame(mode);
+        haptic(true);
+    }
+
     private void applyAiToggles() {
         if (pilot != null) {
             pilot.setSmartShortcuts(smartShortcuts);
@@ -2689,13 +2701,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             return;
         }
         if (resetBtn.contains(x, y)) {
-            // RST: restart the current run (and the current mode) right away.
-            if (randomCycleOn && randomPilot != null && mode == MODE_AUTO) {
-                randomPilot.reshuffleRandomMerge();
-            }
-            applyAiToggles();
-            restartGame(mode);
-            haptic(true);
+            // RST (pause menu): restart the current run in the same mode.
+            restartRun();
             return;
         }
         if (smartBtn.contains(x, y)) {
@@ -2744,10 +2751,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 }
                 return;
             case STATE_PAUSED:
-                // AUTOPLAY switches the AI back on for the same run; anything else
+                // AUTOPLAY switches the AI back on for the same run; CHƠI LẠI starts
+                // a fresh run with the toggles that are active now; anything else
                 // simply continues the run.
                 if (autoResumeBtn.contains(x, y)) {
                     resumeMode(MODE_AUTO);
+                } else if (resetBtn.contains(x, y)) {
+                    restartRun();
                 } else {
                     resumeGame();
                 }
@@ -3637,9 +3647,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     /** Speed − / + with the current multiplier between them. */
     /** AI toggles: SC (safe shortcuts), ZZ (zig-zag), RND (new random cycle). */
-    /** AI toggles: RST (restart), SC (safe shortcuts), ZZ (zig-zag), RND (random cycle). */
+    /** AI toggles: SC (safe shortcuts), ZZ (zig-zag), RND (random cycle). */
     private void drawAiToggles(Canvas c) {
-        drawToggle(c, resetBtn, "RST", false);
         drawToggle(c, smartBtn, "SC", smartShortcuts);
         drawToggle(c, zigBtn, "ZZ", zigzagOn);
         drawToggle(c, rndBtn, "RND", randomCycleOn);
@@ -3752,22 +3761,26 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         c.drawText("TẠM DỪNG", cx, cy - dp(110f), pausedTitlePaint);
 
-        // Two choices only: continue the run, or switch the AUTOPLAY AI back on.
+        // Row 1: continue / switch the AUTOPLAY AI back on.
+        // Row 2: CHƠI LẠI - restart the run with the toggles that are active now.
         float gap = dp(10f);
         float bw = Math.min((boardW * 0.88f - gap) / 2f, dp(170f));
         float bh = dp(50f);
         float bx = cx - (bw * 2f + gap) / 2f;
-        float by = cy - dp(60f);
+        float by = cy - dp(76f);
         resumeBtn.set(bx, by, bx + bw, by + bh);
         autoResumeBtn.set(bx + bw + gap, by, bx + 2f * bw + gap, by + bh);
+        resetBtn.set(bx, by + bh + gap, bx + 2f * bw + gap, by + 2f * bh + gap);
         pathResumeBtn.setEmpty();
         mangoResumeBtn.setEmpty();
 
         drawPrimaryButton(c, resumeBtn, "TIẾP TỤC", false);
         drawSecondaryButton(c, autoResumeBtn, "AUTOPLAY", false);
+        drawSecondaryButton(c, resetBtn, "CHƠI LẠI", false);
 
         String now = mode == MODE_AUTO ? "AUTOPLAY" : "CHƠI";
-        c.drawText("Đang ở chế độ " + now, cx, by + bh + dp(34f), readyHintPaint);
+        c.drawText("Đang ở chế độ " + now, cx, by + 2f * bh + gap + dp(28f),
+                readyHintPaint);
     }
 
     private void drawDeadOverlay(Canvas c, boolean won) {
