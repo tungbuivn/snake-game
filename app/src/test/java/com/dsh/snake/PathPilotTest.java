@@ -41,6 +41,7 @@ public final class PathPilotTest {
         testProofGateMatters();
         testAppStepPolicy();
         testTailChase();
+        testTailIgnoresScZz();
         testOddBoardPath();
 
         System.out.println();
@@ -1065,6 +1066,24 @@ public final class PathPilotTest {
         check("safe search: no wall death", wall == 0);
         check("safe search: fills at least 90% of the board on both sizes",
                 fillsOk == boards.length);
+    }
+    /**
+     * SC / ZZ belong to the Hamiltonian cycle engine: with TAIL switched on the pilot
+     * answers from the safe-search engine only, so flipping SC / ZZ must not change a
+     * single move. (They are stored and take effect again on the cycle engine.)
+     */
+    private static void testTailIgnoresScZz() {
+        AutoPilot plain = new AutoPilot(20, 12, false, false);
+        plain.setTailChase(true);
+        AutoPilot flipped = new AutoPilot(20, 12, false, false);
+        flipped.setTailChase(true);
+        flipped.setSmartShortcuts(false);
+        flipped.setZigzag(true);
+        long a = signature(plain, 424242L, 20, 12, 3000);
+        long b = signature(flipped, 424242L, 20, 12, 3000);
+        System.out.println();
+        System.out.println("TAIL vs SC/ZZ (" + a + " / " + b + ")");
+        check("TAIL ignores SC and ZZ (identical moves)", a == b);
     }
     /** Odd x odd board: no Hamiltonian cycle, the path planner must stay safe. */
     private static void testOddBoardPath() {

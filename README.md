@@ -123,6 +123,12 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      về đuôi **dài nhất** (phụ: nhiều ô trống nhất). Giữ đầu xa đuôi làm thân **trải
      rộng thành zig-zag** thay vì cuộn lại, nhờ đó mở lại đường tới quả;
   4. cùng đường → đi theo đường BFS tới đuôi; cuối cùng mới tới nước "nhiều ô trống nhất".
+  **`SC` và `ZZ` không ảnh hưởng `TAIL`**: hai toggle đó là tham số của động cơ **chu
+  trình** (SC = được bước vào ô đuôi đang bỏ đi, ZZ = bước ngắn từng ô). Khi `TAIL` bật,
+  `activePilot()` trả về pilot safe-search và `decide()` trả lời ngay từ nhánh tail-chase,
+  nên bật cả `TAIL` + `SC` + `ZZ` vẫn **chạy đúng TAIL**; `SC`/`ZZ` chỉ được **lưu lại**
+  và có tác dụng trở lại khi bạn chuyển sang chu trình/`BFS`. Test `TAIL vs SC/ZZ` chứng
+  minh điều đó: bật/tắt SC+ZZ cho **chữ ký chuỗi nước đi giống hệt nhau**.
   **Đo thật** (8 seed × 2 cỡ bàn, test `SAFE SEARCH / TAIL CHASE`): **0 cắn, 0 đâm
   tường**, lấp **20×12: 99,6%** (thắng 4/8), **20×30: 99,0%** (thắng 2/8). Nghĩa là nó
   **gần như** điền kín bàn và **không bao giờ chết**, nhưng **không phải lúc nào cũng
