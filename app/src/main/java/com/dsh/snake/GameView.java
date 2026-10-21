@@ -75,6 +75,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     /** 60 fps frame budget (16.67 ms); the render thread paces itself to this. */
     private static final long FRAME_NS = 16_666_667L;
+    /** Safe-search mode restarts a run that has not eaten for this many ticks: at the
+     * end of the board the heuristic can circle forever, which looks like a freeze. */
+    private static final int STALL_LIMIT = 900;
 
     /** 4-neighbour offsets used by the manual route helper. */
     private static final int[][] NEIGH = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
@@ -136,6 +139,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private final RectF rndBtn = new RectF();
     /** New algorithm button: BFS-to-fruit + full-snake simulation + formal proof. */
     private final RectF bfsBtn = new RectF();
+    /** Safe-search button: greedy BFS + tail chasing (no Hamiltonian cycle). */
+    private final RectF tailBtn = new RectF();
     private final RectF resetBtn = new RectF();
 
     /* --- manual FOLLOW: walk along the body / follow the tail ---------- */
@@ -208,6 +213,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private boolean bfsOn;
     /** The verified ("guaranteed") pilot: BFS to the fruit, whole-snake simulation. */
     private AutoPilot bfsPilot;
+    /** Safe-search toggle: greedy BFS + tail chasing instead of the cycle. */
+    private boolean tailChaseOn;
+    /** The safe-search pilot (zig-zag tail chasing, never on a Hamiltonian cycle). */
+    private AutoPilot tailPilot;
+    /** Ticks without eating, used to restart a stalled safe-search run. */
+    private int stallTicks;
 
     private final ArrayList<Particle> particles = new ArrayList<>();
     private final ArrayList<Popup> popups = new ArrayList<>();
@@ -824,6 +835,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             pilot = new AutoPilot(COLS, rows, false);
             randomPilot = new AutoPilot(COLS, rows, false, false);
             bfsPilot = new AutoPilot(COLS, rows, false, false, true);
+            tailPilot = new AutoPilot(COLS, rows, false, false);
+            tailPilot.setTailChase(true);
             applyAiToggles();
             if (state == STATE_READY) {
                 resetBoardState();
@@ -901,6 +914,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         // BFS button, left of SC: the verified algorithm (shortest proven-safe path).
         bfsBtn.set(tRight - 4f * tb - dp(18f), tBottom - tb,
                 tRight - 3f * tb - dp(18f), tBottom);
+        // TAIL button, left of BFS: safe search with tail chasing (no cycle).
+        tailBtn.set(tRight - 5f * tb - dp(24f), tBottom - tb,
+                tRight - 4f * tb - dp(24f), tBottom);
         resetBtn.setEmpty();   // restart lives in the pause menu now
 
         rebuildShaders();
@@ -1080,6 +1096,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      */
     private AutoPilot activePilot() {
         if (mode == MODE_AUTO) {
+            if (tailChaseOn && tailPilot != null) {
+                // TAIL button: safe search - greedy BFS to the fruit while the tail stays
+                // reachable, otherwise run away from the tail (zig-zag sweep).
+                return tailPilot;
+            }
             if (bfsOn && bfsPilot != null) {
                 // BFS button: the verified engine (BFS to the fruit + simulation of
                 // the whole snake; cycle walk when the shortcut is not proven safe).
@@ -1142,6 +1163,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             bfsPilot.setSmartShortcuts(smartShortcuts);
             bfsPilot.setZigzag(zigzagOn);
         }
+        if (tailPilot != null) {
+            tailPilot.setTailChase(true);
+        }
     }
 
     /** Current speed multiplier picked with the − / + buttons. */
@@ -1198,6 +1222,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         dirQueue.clear();
         prevCells = cellsToArray();
+        stallTicks = 0;
         score = 0;
         tickAccum = 0f;
         animTime = 0f;
@@ -1303,6 +1328,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         lastEatMs = 0L;
     }
 
+    /** Clears the safe-search stall counter (new run / mode change). */
+    private void resetStall() {
+        stallTicks = 0;
+    }
+
     private void pauseGame() {
         if (state == STATE_RUNNING) {
             state = STATE_PAUSED;
@@ -1358,10 +1388,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 // Steady stepping: no teleport / multi-step warp (it caused the
                 // stutter and hid what the snake was really doing).
                 tickAccum += dt * 1000f;
-                int guard = 0;
+                    int guard = 0;
                 while (tickAccum >= interval() && state == STATE_RUNNING && guard++ < 40) {
                     tickAccum -= interval();
                     step();
+                }
+                if (autoMode && tailChaseOn && stallTicks > STALL_LIMIT) {
+                    // Safe search can circle at 99% of the board forever: restart the
+                    // run instead of freezing on the last couple of cells.
+                    logLine("stall restart tail=" + stallTicks + " len=" + body.size());
+                    resetStall();
+                    restartGame(MODE_AUTO);
                 }
             }
         } else if (state == STATE_WON) {
@@ -1503,7 +1540,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         body.addFirst(ni);
 
+        if (!eats) {
+            stallTicks++;
+        }
         if (eats) {
+            stallTicks = 0;
             score += 10;
             if (score > highScore) {
                 highScore = score;
@@ -2643,6 +2684,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + " spd=" + speedIndex + " sc=" + (smartShortcuts ? 1 : 0)
                     + " zz=" + (zigzagOn ? 1 : 0)
                     + " bfs=" + (bfsOn ? 1 : 0)
+                    + " tail=" + (tailChaseOn ? 1 : 0)
+                    + " tailB=" + Math.round(tailBtn.centerX()) + ","
+                    + Math.round(tailBtn.centerY())
                     + " bfsB=" + Math.round(bfsBtn.centerX()) + ","
                     + Math.round(bfsBtn.centerY())
                     + " scB=" + Math.round(smartBtn.centerX()) + ","
@@ -2756,6 +2800,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             restartRun();
             return;
         }
+        if (tailBtn.contains(x, y)) {
+            // TAIL: safe search - greedy BFS plus tail chasing, no Hamiltonian cycle.
+            tailChaseOn = !tailChaseOn;
+            if (tailChaseOn) {
+                bfsOn = false;
+                randomCycleOn = false;
+            }
+            stallTicks = 0;
+            haptic(false);
+            if (autoMode) {
+                restartGame(MODE_AUTO);
+            }
+            return;
+        }
         if (bfsBtn.contains(x, y)) {
             // BFS: autoplay switches to the verified engine - shortest path to the
             // fruit, simulated over the whole snake and only taken when formally
@@ -2764,6 +2822,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             bfsOn = !bfsOn;
             if (bfsOn) {
                 randomCycleOn = false;   // one autoplay engine at a time
+                tailChaseOn = false;
             }
             haptic(false);
             if (autoMode) {
@@ -2791,6 +2850,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             randomCycleOn = !randomCycleOn;
             if (randomCycleOn) {
                 bfsOn = false;   // one autoplay engine at a time
+                tailChaseOn = false;
                 if (randomPilot != null) {
                     randomPilot.reshuffleRandomMerge();
                 }
@@ -3633,9 +3693,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void drawAutoBadge(Canvas c) {
-        String label = bfsOn ? "AUTOPLAY · BFS" : "AUTOPLAY";
+        String label = bfsOn ? "AUTOPLAY · BFS"
+                : (tailChaseOn ? "AUTOPLAY · TAIL" : "AUTOPLAY");
         float bh = dp(24f);
-        float bw = bfsOn ? dp(126f) : dp(86f);
+        float bw = (bfsOn || tailChaseOn) ? dp(126f) : dp(86f);
         float bx = pauseCx - pauseR - dp(14f) - bw;
         float by = pauseCy - bh / 2f;
         autoBadge.set(bx - dp(4f), by - dp(6f), bx + bw + dp(4f), by + bh + dp(6f));
@@ -3715,6 +3776,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     /** Speed − / + with the current multiplier between them. */
     /** AI toggles: BFS (verified algorithm), SC, ZZ, RND (random cycle). */
     private void drawAiToggles(Canvas c) {
+        drawToggle(c, tailBtn, "TAIL", tailChaseOn);
         drawToggle(c, bfsBtn, "BFS", bfsOn);
         drawToggle(c, smartBtn, "SC", smartShortcuts);
         drawToggle(c, zigBtn, "ZZ", zigzagOn);

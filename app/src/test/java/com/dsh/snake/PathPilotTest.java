@@ -40,6 +40,7 @@ public final class PathPilotTest {
         testVerifiedWin();
         testProofGateMatters();
         testAppStepPolicy();
+        testTailChase();
         testOddBoardPath();
 
         System.out.println();
@@ -1021,6 +1022,49 @@ public final class PathPilotTest {
         System.out.println();
         check("app loop: the verified engine never bites", bites == 0);
         check("app loop: the verified engine fills the board", wins == seeds.length);
+    }
+    /**
+     * Safe-search engine ("always keep a way to your tail", zig-zag sweep, no
+     * Hamiltonian cycle): greedy BFS to the fruit while the whole route stays
+     * tail-safe, otherwise run away from the tail. It must never die and must fill
+     * almost the whole board - but it is a heuristic, so it is NOT required to win
+     * every game (the Hamiltonian engine is the one with the 100% proof).
+     */
+    private static void testTailChase() {
+        int[][] boards = {{20, 12}, {20, 30}};
+        long[] seeds = {1L, 7L, 99L, 424242L, 7919L, 33331L, 555L, 2024L};
+        System.out.println();
+        System.out.println("SAFE SEARCH / TAIL CHASE (" + seeds.length + " seeds x "
+                + boards.length + " boards)");
+        int bites = 0;
+        int wall = 0;
+        int fillsOk = 0;
+        for (int[] b : boards) {
+            int wins = 0;
+            long sumLen = 0;
+            int worstLen = 0;
+            for (long seed : seeds) {
+                AutoPilot p = new AutoPilot(b[0], b[1], false, false);
+                p.setTailChase(true);
+                int[] r = runCycle(p, seed, b[0], b[1], 40000);
+                wins += r[0];
+                bites += r[1];
+                wall += r[2];
+                sumLen += r[5];
+                worstLen = Math.max(worstLen, r[5]);
+            }
+            double meanFill = sumLen / (double) seeds.length / (b[0] * b[1]);
+            System.out.printf("  tailchase %dx%-3d wins=%d/%d meanFill=%.1f%% maxLen=%d/%d%n",
+                    b[0], b[1], wins, seeds.length, meanFill * 100f, worstLen, b[0] * b[1]);
+            if (meanFill >= 0.90) {
+                fillsOk++;
+            }
+        }
+        System.out.println();
+        check("safe search: no self bite on any run", bites == 0);
+        check("safe search: no wall death", wall == 0);
+        check("safe search: fills at least 90% of the board on both sizes",
+                fillsOk == boards.length);
     }
     /** Odd x odd board: no Hamiltonian cycle, the path planner must stay safe. */
     private static void testOddBoardPath() {

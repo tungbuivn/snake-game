@@ -45,11 +45,14 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      quả sinh trong cung đó nên **luôn tới được** và **không bao giờ bị dời**; thân là một
      đoạn liền trên chu trình và chỉ dài thêm khi ăn → cung trống co dần đều → **điền kín
      bàn** = **thắng**, **0 cắn thân, 0 đâm tường**.
-     Bốn nút toggle đổi biến thể mà **không cần chọn mode**:
+     Năm nút toggle đổi biến thể mà **không cần chọn mode**:
      - `BFS` — **thuật toán đã kiểm chứng** (mặc định TẮT, xem mục *Nút BFS* bên dưới):
        autoplay chuyển sang động cơ `BFS tới quả + mô phỏng cả thân rắn + cổng chứng
        minh an toàn`, và trên bàn **lẻ × lẻ** thì tự chuyển sang **planner đường
        Hamilton** thay vì chu trình (`20` cột là số chẵn nên máy luôn đi nhánh chu trình).
+     - `TAIL` — **safe search / bám đuôi** (mặc định TẮT, xem mục *Nút TAIL* bên dưới):
+       không dùng chu trình Hamilton, chỉ có **BFS đường ngắn nhất tới quả** + luật
+       **"luôn còn đường bám đuôi"**; rắn quét bàn theo kiểu **zig-zag**.
      - `SC` — **shortcut an toàn** (mặc định BẬT): cho phép bước vào ô **đuôi đang bỏ
        đi** (nước tắt ngắn nhất mà vẫn an toàn); tắt `SC` thì chỉ đi tiến trong cung.
      - `ZZ` — **longer path / zig-zag**: thay vì nhảy một bước dài trên chu trình, rắn
@@ -57,6 +60,7 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
        thể cắn thân.
      - `RND` — **chu trình ngẫu nhiên**: dựng lại bằng **divide & conquer + merge 2×2**
        (mỗi lần đều `cycleValid`) rồi chơi lại trên chu trình mới.
+     Ba nút `TAIL` / `BFS` / `RND` **loại trừ nhau** (mỗi lúc chỉ một động cơ autoplay).
      Test `WIN RATE`: **20 seed × 4 biến thể × 2 cỡ bàn = 160 ván → 100% thắng, 0 chết**
      (`winTick` TB 20×12: snake 3.448, randmerge 3.930; 20×30: snake 14.236, randmerge 22.500).
      Test `AI TOGGLES ARE LIVE` chứng minh `SC` và `ZZ` **thật sự đổi nước đi** (chữ ký
@@ -108,6 +112,26 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
   0 cắn, 0 tường** (`winTick` TB 20×12 = 3.526, 20×20 = 7.341, 20×30 = 14.235);
   bàn lẻ **11×13 → thắng, 143/143 ô**, 0 cắn, 0 tường. Trạng thái ghi vào `state.txt`
   (`bfs=1`, `bfsB=`).
+
+- **Nút `TAIL` — safe search / bám đuôi (`AutoPilot.tailChase`)**: đây là thuật toán
+  "quét zig-zag và luôn còn đường bám đuôi" — **không** dùng chu trình Hamilton:
+  1. **BFS đường ngắn nhất** tới quả (thân là tường, **ô đuôi tính là trống**);
+  2. chỉ đi bước đầu khi **mô phỏng cả đường đi** (ăn thì dài thêm) mà sau **mỗi bước**
+     vẫn **không tự cắn** và **vẫn còn đường tới đuôi** — đây là bất biến
+     *"luôn có đường bám đuôi"*;
+  3. nếu đường tới quả không an toàn thì **chạy xa đuôi**: chọn nước an toàn có đường
+     về đuôi **dài nhất** (phụ: nhiều ô trống nhất). Giữ đầu xa đuôi làm thân **trải
+     rộng thành zig-zag** thay vì cuộn lại, nhờ đó mở lại đường tới quả;
+  4. cùng đường → đi theo đường BFS tới đuôi; cuối cùng mới tới nước "nhiều ô trống nhất".
+  **Đo thật** (8 seed × 2 cỡ bàn, test `SAFE SEARCH / TAIL CHASE`): **0 cắn, 0 đâm
+  tường**, lấp **20×12: 99,6%** (thắng 4/8), **20×30: 99,0%** (thắng 2/8). Nghĩa là nó
+  **gần như** điền kín bàn và **không bao giờ chết**, nhưng **không phải lúc nào cũng
+  thắng**: khi chỉ còn vài ô, điều kiện an toàn có thể không bao giờ thoả nữa và rắn
+  **xoay vòng tại chỗ** (đúng như tài liệu của họ mô tả: "safe search never dies but only
+  finishes 4/100 games"). Vì vậy trong app, nếu TAIL **900 tick không ăn được quả** thì
+  ván **tự chơi lại** (log `stall restart tail=`) để không thấy như bị treo; muốn **điền
+  kín 100%** thì dùng chu trình (mặc định) hoặc nút `BFS`.
+  Tham khảo: [How the Snake AI works: BFS, tail safety & Hamiltonian cycles](https://lkforge.com/games/snake/blog-how-the-ai-works).
 
 - **Tốc độ đều, KHÔNG gia tốc**: `interval` cố định — **60ms/ô** ở chế độ tự động,
   **110ms/ô** ở chơi tay. Nó chỉ co lại (sàn **32ms**) khi quả còn quá xa, theo ngân
@@ -224,7 +248,7 @@ kín), không bao giờ cắn vào cổ, và in ra bảng từng lần cắn (`t
 | `FOLLOW` (ô dưới-trái của cụm phím) | **Bám đuôi**: bấm 1 lần → *chờ chọn điểm* (chạm lên **một đốt trên thân rắn** để đặt điểm dừng); bấm lần nữa → chạy bám đuôi luôn. Rắn tự tìm đường (BFS) **chạy theo đuôi** và **luôn giữ khoảng cách ≥ 2 ô tới đuôi** (để lúc ăn quả, đuôi có dài ra thêm 1 đốt vẫn còn khoảng an toàn mà bám); dừng khi **đầu tới đúng điểm đã chọn**. Nút đổi thành **`STOP`** khi đang chạy |
 | `MOVE` / `DỪNG` (thanh dưới) | Cho rắn chạy theo route / dừng lại để sửa |
 | `−` / `+` (góc dưới-phải) | **Tốc độ chạy**: mỗi lần bấm đổi 1 nấc `0.5× · 0.75× · 1× · 1.5× · 2× · 3×` (giữa hai nút hiện số hiện tại). Tốc độ chia tick interval nên áp dụng cho **cả chơi tay lẫn AI**, lưu lại cho lần mở sau |
-| `BFS` / `SC` / `ZZ` / `RND` (hàng trên nút tốc độ) | `BFS` = autoplay dùng **thuật toán đã kiểm chứng** (BFS đường ngắn nhất tới quả + mô phỏng cả thân rắn + **cổng chứng minh** giữ nguyên cung Hamilton; bàn lẻ × lẻ tự chuyển sang **planner đường Hamilton**) — bật/tắt sẽ chơi lại ván mới bằng động cơ đó; `SC` = **shortcut an toàn** (được bước vào ô đuôi đang bỏ đi); `ZZ` = **zig-zag / longer path** (bước ngắn từng ô thay vì nhảy dài, đường dài hơn — ý tưởng từ [chuyangliu/snake](https://github.com/chuyangliu/snake)); `RND` = autoplay dùng **chu trình Hamilton ngẫu nhiên** (divide-and-merge các dải, có validate) — bật/tắt sẽ chơi lại ngay trên chu trình mới. **Toggle đang bật được áp dụng ngay lập tức** (BFS/SC/ZZ đổi hành vi từ tick kế tiếp, RND đổi chu trình), và trạng thái được ghi vào `state.txt` (`bfs=`, `sc=`, `zz=`). Test `AI TOGGLES ARE LIVE` chứng minh `SC`/`ZZ` **thật sự đổi nước đi**; test `AI TOGGLES` + `WIN RATE` xác nhận mọi biến thể vẫn điền kín bàn, 0 cắn, 0 chết tường |
+| `TAIL` / `BFS` / `SC` / `ZZ` / `RND` (hàng trên nút tốc độ) | `TAIL` = autoplay dùng **safe search / bám đuôi** (BFS tới quả, chỉ đi khi mô phỏng xong vẫn còn đường tới đuôi; không an toàn thì **chạy xa đuôi** để quét bàn theo zig-zag) — đo được **99% bàn, 0 chết** nhưng có thể xoay vòng ở cuối nên app **tự chơi lại sau 900 tick không ăn**; `BFS` = autoplay dùng **thuật toán đã kiểm chứng** (BFS đường ngắn nhất tới quả + mô phỏng cả thân rắn + **cổng chứng minh** giữ nguyên cung Hamilton; bàn lẻ × lẻ tự chuyển sang **planner đường Hamilton**) — bật/tắt sẽ chơi lại ván mới bằng động cơ đó; `SC` = **shortcut an toàn** (được bước vào ô đuôi đang bỏ đi); `ZZ` = **zig-zag / longer path** (bước ngắn từng ô thay vì nhảy dài, đường dài hơn — ý tưởng từ [chuyangliu/snake](https://github.com/chuyangliu/snake)); `RND` = autoplay dùng **chu trình Hamilton ngẫu nhiên** (divide-and-merge các dải, có validate) — bật/tắt sẽ chơi lại ngay trên chu trình mới. Ba nút `TAIL` / `BFS` / `RND` **loại trừ nhau**. **Toggle đang bật được áp dụng ngay lập tức** (TAIL/BFS/SC/ZZ đổi hành vi từ tick kế tiếp, RND đổi chu trình), và trạng thái được ghi vào `state.txt` (`tail=`, `bfs=`, `sc=`, `zz=`). Test `AI TOGGLES ARE LIVE` chứng minh `SC`/`ZZ` **thật sự đổi nước đi**; test `AI TOGGLES` + `WIN RATE` xác nhận mọi biến thể vẫn điền kín bàn, 0 cắn, 0 chết tường; test `SAFE SEARCH / TAIL CHASE` đo `TAIL` đạt 99% bàn với 0 chết |
 | Menu tạm dừng | `TIẾP TỤC` để chạy tiếp · **`AUTOPLAY`** = bật lại AI cho ván đang chơi (giữ điểm, kể cả khi bạn vừa chạm badge để điều khiển tay) · **`CHƠI LẠI`** = **chơi lại ván mới ngay tại chỗ** với đúng mode + đúng thuật toán (SC/ZZ/RND) đang chọn |
 | Vuốt 4 hướng (chế độ AI) | Chuyển sang tự điều khiển (rắn đứng chờ waypoint) |
 | Chạm `CHƠI` / `AUTOPLAY` | Bắt đầu chơi tay (waypoint) hoặc để AI autoplay (2 nút xếp dọc) |
