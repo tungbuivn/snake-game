@@ -73,6 +73,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private static final float SWIPE_SLOP_DP = 20f;
 
+    /** 60 fps frame budget (16.67 ms); the render thread paces itself to this. */
+    private static final long FRAME_NS = 16_666_667L;
+
     /** 4-neighbour offsets used by the manual route helper. */
     private static final int[][] NEIGH = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 
@@ -131,6 +134,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private final RectF smartBtn = new RectF();
     private final RectF zigBtn = new RectF();
     private final RectF rndBtn = new RectF();
+    /** New algorithm button: BFS-to-fruit + full-snake simulation + formal proof. */
+    private final RectF bfsBtn = new RectF();
     private final RectF resetBtn = new RectF();
 
     /* --- manual FOLLOW: walk along the body / follow the tail ---------- */
@@ -199,6 +204,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private AutoPilot randomPilot;
     /** RND toggle: autoplay uses the random cycle instead of the fixed snake. */
     private boolean randomCycleOn;
+    /** BFS toggle: autoplay uses the verified BFS + simulation engine instead. */
+    private boolean bfsOn;
+    /** The verified ("guaranteed") pilot: BFS to the fruit, whole-snake simulation. */
+    private AutoPilot bfsPilot;
 
     private final ArrayList<Particle> particles = new ArrayList<>();
     private final ArrayList<Popup> popups = new ArrayList<>();
@@ -297,8 +306,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private boolean gestureConsumed;
     private boolean tapOnPause;
     private float[] drawnPts = new float[0];
-    /** True on the tick that ate a fruit: the head is drawn on the new cell. */
-    private boolean snapHead;
+    /** Draw through SurfaceHolder.lockHardwareCanvas() when the device allows it. */
+    private boolean hardwareCanvas = true;
     private int drawnCount;
     private Shader greenShader;
     private float greenShaderTop = Float.NaN;
@@ -814,6 +823,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             // cycle for each run; SC / ZZ change how it chases the fruit.
             pilot = new AutoPilot(COLS, rows, false);
             randomPilot = new AutoPilot(COLS, rows, false, false);
+            bfsPilot = new AutoPilot(COLS, rows, false, false, true);
             applyAiToggles();
             if (state == STATE_READY) {
                 resetBoardState();
@@ -888,6 +898,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         zigBtn.set(tRight - 2f * tb - dp(6f), tBottom - tb, tRight - tb - dp(6f), tBottom);
         smartBtn.set(tRight - 3f * tb - dp(12f), tBottom - tb,
                 tRight - 2f * tb - dp(12f), tBottom);
+        // BFS button, left of SC: the verified algorithm (shortest proven-safe path).
+        bfsBtn.set(tRight - 4f * tb - dp(18f), tBottom - tb,
+                tRight - 3f * tb - dp(18f), tBottom);
         resetBtn.setEmpty();   // restart lives in the pause menu now
 
         rebuildShaders();
@@ -989,9 +1002,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     @Override
     public void run() {
-        long last = System.nanoTime();
-        int frames = 0;
+        // Fixed 60 fps schedule (16.67 ms per frame). The sleep is computed against
+        // an absolute deadline, so the render thread keeps a steady cadence instead
+        // of "work + 15 ms" (which gave a 25-35 ms frame = the head looked jerky).
+        long nextFrame = System.nanoTime();
+        long last = nextFrame;
         while (running) {
+            nextFrame += FRAME_NS;
             long frameStart = System.nanoTime();
             float dt = Math.min(0.05f, (frameStart - last) / 1_000_000_000f);
             last = frameStart;
@@ -999,11 +1016,26 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             if (surfaceReady) {
                 Canvas c = null;
                 try {
-                    c = holder.lockCanvas();
+                    // Hardware canvas: the snake is 5-6 stroked passes over one path
+                    // plus up to 90 scale ribs; on the software canvas that costs
+                    // 20-35 ms per frame for a long snake (25-40 fps). The GPU canvas
+                    // keeps it at 60 fps.
+                    // PathEffect (the dashed route preview) only works on a hardware
+                    // canvas from API 28 on, so older devices stay on the software path.
+                    if (hardwareCanvas && android.os.Build.VERSION.SDK_INT >= 28) {
+                        try {
+                            c = holder.lockHardwareCanvas();
+                        } catch (Throwable t) {
+                            hardwareCanvas = false;
+                            Log.w("SnakeGeom", "hardware canvas unavailable", t);
+                        }
+                    }
+                    if (c == null) {
+                        c = holder.lockCanvas();
+                    }
                     if (c != null) {
                         update(dt);
                         render(c);
-                        frames++;
                         frameCount++;
                     }
                 } catch (Exception e) {
@@ -1019,15 +1051,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 }
             }
 
-            long spent = (System.nanoTime() - frameStart) / 1_000_000L;
-            long target = (state == STATE_RUNNING) ? 15L : 30L;
-            long sleep = target - spent;
-            if (sleep > 0) {
-                try {
-                    Thread.sleep(sleep);
-                } catch (InterruptedException e) {
-                    return;
+            long waitNs = nextFrame - System.nanoTime();
+            if (waitNs > 0L) {
+                long ms = waitNs / 1_000_000L;
+                if (ms > 0L) {
+                    try {
+                        Thread.sleep(ms);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
                 }
+            } else if (waitNs < -FRAME_NS * 4L) {
+                // More than four frames behind: resynchronise instead of trying to
+                // catch up (catching up would just freeze the picture).
+                nextFrame = System.nanoTime();
             }
         }
     }
@@ -1043,6 +1080,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      */
     private AutoPilot activePilot() {
         if (mode == MODE_AUTO) {
+            if (bfsOn && bfsPilot != null) {
+                // BFS button: the verified engine (BFS to the fruit + simulation of
+                // the whole snake; cycle walk when the shortcut is not proven safe).
+                return bfsPilot;
+            }
             return randomCycleOn && randomPilot != null ? randomPilot : pilot;
         }
         return null;
@@ -1095,6 +1137,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (randomPilot != null) {
             randomPilot.setSmartShortcuts(smartShortcuts);
             randomPilot.setZigzag(zigzagOn);
+        }
+        if (bfsPilot != null) {
+            bfsPilot.setSmartShortcuts(smartShortcuts);
+            bfsPilot.setZigzag(zigzagOn);
         }
     }
 
@@ -1152,7 +1198,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         dirQueue.clear();
         prevCells = cellsToArray();
-        snapHead = false;
         score = 0;
         tickAccum = 0f;
         animTime = 0f;
@@ -1355,6 +1400,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
     }
 
+    /** Branch id of the AI move applied on the last tick (diagnostics only). */
+    private int lastAiBranch;
+
     private void step() {
         if (!autoMode && mode == MODE_MANUAL) {
             boolean moved = following ? stepFollow() : stepManualPath();
@@ -1373,6 +1421,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 // the fixed boustrophedon cycle too, so it fills the board (a win)
                 // instead of chasing the fruit and trapping itself.
                 d = cycle.decide(cellsToArray(), foodCell, dirX, dirY);
+                lastAiBranch = cycle.lastBranchId();
             }
             if (d != null) {
                 dirX = d[0];
@@ -1434,7 +1483,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         int ni = ny * COLS + nx;
         boolean eats = ni == foodCell;
-        snapHead = eats;
         prevCells = cellsToArray();
         if (!eats) {
             body.pollLast();
@@ -1446,7 +1494,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             logLine("BITE dir=" + dirX + "," + dirY + " head=" + hx + "," + hy
                     + " hit=" + nx + "," + ny + " len=" + body.size()
                     + " food=" + foodCell
-                    + " branch=" + mode);
+                    + " branch=" + mode + " ai=" + lastAiBranch);
             biteSelf(ni);
             registerDeath("bite");
             spawnDeathFx(nx, ny);
@@ -2594,6 +2642,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + " pause=" + Math.round(pauseCx) + "," + Math.round(pauseCy)
                     + " spd=" + speedIndex + " sc=" + (smartShortcuts ? 1 : 0)
                     + " zz=" + (zigzagOn ? 1 : 0)
+                    + " bfs=" + (bfsOn ? 1 : 0)
+                    + " bfsB=" + Math.round(bfsBtn.centerX()) + ","
+                    + Math.round(bfsBtn.centerY())
                     + " scB=" + Math.round(smartBtn.centerX()) + ","
                     + Math.round(smartBtn.centerY())
                     + " zzB=" + Math.round(zigBtn.centerX()) + ","
@@ -2705,6 +2756,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             restartRun();
             return;
         }
+        if (bfsBtn.contains(x, y)) {
+            // BFS: autoplay switches to the verified engine - shortest path to the
+            // fruit, simulated over the whole snake and only taken when formally
+            // proven safe; otherwise it walks the Hamiltonian cycle/path. The run
+            // restarts so the new engine drives it from the first move.
+            bfsOn = !bfsOn;
+            if (bfsOn) {
+                randomCycleOn = false;   // one autoplay engine at a time
+            }
+            haptic(false);
+            if (autoMode) {
+                restartGame(MODE_AUTO);
+            }
+            return;
+        }
         if (smartBtn.contains(x, y)) {
             // SC: allow safe shortcuts that leave the Hamiltonian cycle.
             smartShortcuts = !smartShortcuts;
@@ -2723,8 +2789,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             // RND: autoplay uses a fresh random Hamiltonian cycle each run instead of
             // the fixed snake. Toggling it restarts the run on the new cycle.
             randomCycleOn = !randomCycleOn;
-            if (randomCycleOn && randomPilot != null) {
-                randomPilot.reshuffleRandomMerge();
+            if (randomCycleOn) {
+                bfsOn = false;   // one autoplay engine at a time
+                if (randomPilot != null) {
+                    randomPilot.reshuffleRandomMerge();
+                }
             }
             if (autoMode) {
                 restartGame(MODE_AUTO);
@@ -3314,13 +3383,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         float hx = cellPx(prevCells[0]);
         float hy = cellPy(prevCells[0]);
-        // The head glides from its previous cell to the new one, exactly like the
-        // body: snapping a whole cell per tick is what made slow speeds look jerky.
-        // Only on the tick that eats the fruit is it placed on the new cell at once,
-        // so it is *in* the fruit cell when the fruit disappears.
-        float ht = snapHead ? 1f : t;
-        drawnPts[0] = hx + (cellPx(newHead) - hx) * ht;
-        drawnPts[1] = hy + (cellPy(newHead) - hy) * ht;
+        // The head glides from its previous cell to the new one, continuously - also
+        // on the tick that eats a fruit (snapping it a whole cell there was the last
+        // remaining "jerk" the eye could catch).
+        drawnPts[0] = hx + (cellPx(newHead) - hx) * t;
+        drawnPts[1] = hy + (cellPy(newHead) - hy) * t;
 
         int idx = 2;
         for (int i = 0; i < m - 1; i++) {
@@ -3566,9 +3633,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void drawAutoBadge(Canvas c) {
-        String label = "AUTOPLAY";
+        String label = bfsOn ? "AUTOPLAY · BFS" : "AUTOPLAY";
         float bh = dp(24f);
-        float bw = dp(86f);
+        float bw = bfsOn ? dp(126f) : dp(86f);
         float bx = pauseCx - pauseR - dp(14f) - bw;
         float by = pauseCy - bh / 2f;
         autoBadge.set(bx - dp(4f), by - dp(6f), bx + bw + dp(4f), by + bh + dp(6f));
@@ -3646,9 +3713,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     /** Speed − / + with the current multiplier between them. */
-    /** AI toggles: SC (safe shortcuts), ZZ (zig-zag), RND (new random cycle). */
-    /** AI toggles: SC (safe shortcuts), ZZ (zig-zag), RND (random cycle). */
+    /** AI toggles: BFS (verified algorithm), SC, ZZ, RND (random cycle). */
     private void drawAiToggles(Canvas c) {
+        drawToggle(c, bfsBtn, "BFS", bfsOn);
         drawToggle(c, smartBtn, "SC", smartShortcuts);
         drawToggle(c, zigBtn, "ZZ", zigzagOn);
         drawToggle(c, rndBtn, "RND", randomCycleOn);

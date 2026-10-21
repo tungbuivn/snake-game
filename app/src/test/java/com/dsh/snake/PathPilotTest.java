@@ -36,6 +36,11 @@ public final class PathPilotTest {
         testWinningRun();
         testSmartVariants();
         testWinRate100();
+        testTogglesAreLive();
+        testVerifiedWin();
+        testProofGateMatters();
+        testAppStepPolicy();
+        testOddBoardPath();
 
         System.out.println();
         System.out.println("RESULT: " + passed + " passed, " + failed + " failed");
@@ -504,13 +509,16 @@ public final class PathPilotTest {
         int bites = 0;
         int wall = 0;
         int winTick = -1;
+        int biteBranch = 0;
+        int maxLen = body.size();
         for (int tick = 0; tick < steps; tick++) {
             int[] cells = toArray(body);
             int[] d = pilot.decide(cells, food, dirX, dirY);
-            if (d != null) {
-                dirX = d[0];
-                dirY = d[1];
+            if (d == null) {
+                break;
             }
+            dirX = d[0];
+            dirY = d[1];
             int head = body.get(0);
             int chx = head % cols;
             int chy = head / cols;
@@ -527,9 +535,11 @@ public final class PathPilotTest {
             }
             if (body.contains(ni)) {
                 bites = 1;
+                biteBranch = pilot.lastBranchId();
                 break;
             }
             body.add(0, ni);
+            maxLen = Math.max(maxLen, body.size());
             if (eats) {
                 if (body.size() >= total) {
                     winTick = tick;
@@ -538,7 +548,7 @@ public final class PathPilotTest {
                 food = pilot.pickFoodCell(toArray(body), rnd);
             }
         }
-        return new int[]{winTick >= 0 ? 1 : 0, bites, wall, winTick};
+        return new int[]{winTick >= 0 ? 1 : 0, bites, wall, winTick, biteBranch, maxLen};
     }
 
     /**
@@ -723,6 +733,317 @@ public final class PathPilotTest {
             a[i] = body.get(i);
         }
         return a;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 10. BFS button: verified engine (shortest proven-safe path)        */
+    /* ------------------------------------------------------------------ */
+
+    /** Move signature of a run: used to prove a toggle really changes the play. */
+    private static long signature(AutoPilot pilot, long seed, int cols, int rows, int steps) {
+        Random rnd = new Random(seed);
+        int[] start = pilot.initialBody(4);
+        ArrayList<Integer> body = new ArrayList<>();
+        for (int c : start) {
+            body.add(c);
+        }
+        int[] first = pilot.firstDirection(start[0]);
+        int dirX = first[0];
+        int dirY = first[1];
+        int food = pilot.pickFoodCell(toArray(body), rnd);
+        long h = 17L;
+        for (int tick = 0; tick < steps; tick++) {
+            int[] d = pilot.decide(toArray(body), food, dirX, dirY);
+            if (d == null) {
+                break;
+            }
+            dirX = d[0];
+            dirY = d[1];
+            h = h * 31L + (dirY + 2) * 4L + (dirX + 2);
+            int head = body.get(0);
+            int nx = head % cols + dirX;
+            int ny = head / cols + dirY;
+            if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) {
+                break;
+            }
+            int ni = ny * cols + nx;
+            boolean eats = ni == food;
+            if (!eats) {
+                body.remove(body.size() - 1);
+            }
+            if (body.contains(ni)) {
+                break;
+            }
+            body.add(0, ni);
+            if (eats) {
+                if (body.size() >= cols * rows) {
+                    break;
+                }
+                food = pilot.pickFoodCell(toArray(body), rnd);
+            }
+        }
+        return h;
+    }
+
+    /** SC / ZZ must actually change the decisions, not just be dead flags. */
+    private static void testTogglesAreLive() {
+        System.out.println();
+        System.out.println("AI TOGGLES ARE LIVE (decisions must differ)");
+        AutoPilot off = new AutoPilot(20, 12, false, true);
+        off.setSmartShortcuts(false);
+        off.setZigzag(false);
+        AutoPilot on = new AutoPilot(20, 12, false, true);
+        on.setSmartShortcuts(true);
+        on.setZigzag(false);
+        AutoPilot zz = new AutoPilot(20, 12, false, true);
+        zz.setSmartShortcuts(true);
+        zz.setZigzag(true);
+        long a = signature(off, 424242L, 20, 12, 3000);
+        long b = signature(on, 424242L, 20, 12, 3000);
+        long c = signature(zz, 424242L, 20, 12, 3000);
+        System.out.printf("  SC off=%d  SC on=%d  ZZ on=%d%n", a, b, c);
+        check("SC toggle changes the play", a != b);
+        check("ZZ toggle changes the play", b != c);
+    }
+
+    /**
+     * The BFS button: verified shortcuts (BFS to the fruit + whole-snake simulation)
+     * must still fill the board on every seed and every board size, with no bite and
+     * no wall death - the "formally proven safe" path may never kill the snake.
+     */
+    private static void testVerifiedWin() {
+        int[][] boards = {{20, 12}, {20, 20}, {20, 30}, {20, 34}};
+        long[] seeds = {1L, 7L, 99L, 424242L, 7919L, 33331L};
+        System.out.println();
+        System.out.println("BFS BUTTON - verified engine (" + seeds.length + " seeds x "
+                + boards.length + " boards)");
+        int fails = 0;
+        int bites = 0;
+        int wall = 0;
+        for (int[] b : boards) {
+            int wins = 0;
+            long sum = 0;
+            int worst = 0;
+            int worstLen = 0;
+            for (long seed : seeds) {
+                AutoPilot p = new AutoPilot(b[0], b[1], false, false, true);
+                int[] r = runCycle(p, seed, b[0], b[1], 120000);
+                wins += r[0];
+                bites += r[1];
+                wall += r[2];
+                worstLen = Math.max(worstLen, r[5]);
+                if (r[0] == 1) {
+                    sum += r[3];
+                    worst = Math.max(worst, r[3]);
+                } else {
+                    System.out.printf("    seed=%-7d win=%d bite=%d(branch %d) wall=%d len=%d/%d%n",
+                            seed, r[0], r[1], r[4], r[2], r[5], b[0] * b[1]);
+                }
+            }
+            System.out.printf("  verified %dx%-3d wins=%d/%d avgWin=%d maxWin=%d maxLen=%d/%d%n",
+                    b[0], b[1], wins, seeds.length, wins > 0 ? sum / wins : 0, worst,
+                    worstLen, b[0] * b[1]);
+            if (wins != seeds.length) {
+                fails++;
+            }
+        }
+        System.out.println();
+        check("BFS: every verified run fills the board", fails == 0);
+        check("BFS: no self bite", bites == 0);
+        check("BFS: no wall death", wall == 0);
+    }
+
+    /**
+     * The proof gate is not decoration: with the raw BFS shortcut (gate off) the
+     * snake cuts corners, leaves holes behind its head and dies on every seed; with
+     * the gate on the very same seeds fill the board.
+     */
+    private static void testProofGateMatters() {
+        int cols = 20;
+        int rows = 12;
+        long[] seeds = {1L, 7L, 99L};
+        System.out.println();
+        System.out.println("PROOF GATE (20x12, gate off vs gate on)");
+        int rawBites = 0;
+        int gatedWins = 0;
+        for (long seed : seeds) {
+            AutoPilot raw = new AutoPilot(cols, rows, false, false, true);
+            raw.setProofGate(false);
+            int[] r = runCycle(raw, seed, cols, rows, 20000);
+            rawBites += r[1];
+            AutoPilot gated = new AutoPilot(cols, rows, false, false, true);
+            int[] g = runCycle(gated, seed, cols, rows, 20000);
+            gatedWins += g[0];
+            System.out.printf("  seed=%-6d gate off: win=%d bite=%d len=%d/240 |"
+                            + " gate on: win=%d bite=%d winTick=%d%n",
+                    seed, r[0], r[1], r[5], g[0], g[1], g[3]);
+        }
+        System.out.println();
+        check("proof gate: without it the shortcut kills the snake", rawBites > 0);
+        check("proof gate: with it every seed fills the board", gatedWins == seeds.length);
+    }
+
+    /**
+     * Replays the app loop exactly as GameView.step() does it - including the
+     * "safety net" that may override the pilot with fallbackDirection() and the
+     * GameView.spawnFood() policy. Used to reproduce on-device bites in a test.
+     */
+    private static int[] runAppPolicy(AutoPilot pilot, long seed, int cols, int rows,
+                                      int steps, String[] biteLog) {
+        int total = cols * rows;
+        Random rnd = new Random(seed);
+        int[] start = pilot.initialBody(4);
+        ArrayList<Integer> body = new ArrayList<>();
+        for (int c : start) {
+            body.add(c);
+        }
+        int[] first = pilot.firstDirection(start[0]);
+        int dirX = first[0];
+        int dirY = first[1];
+        int food = spawnApp(pilot, body, cols, rows, rnd);
+        int bites = 0;
+        int wall = 0;
+        int winTick = -1;
+        int maxLen = body.size();
+        for (int tick = 0; tick < steps; tick++) {
+            int[] d = pilot.decide(toArray(body), food, dirX, dirY);
+            int pilotBranch = pilot.lastBranchId();
+            boolean nullMove = d == null;
+            if (d != null) {
+                dirX = d[0];
+                dirY = d[1];
+            }
+            // GameView safety net: bad step -> roomiest free neighbour.
+            int headCell = body.get(0);
+            int px = headCell % cols;
+            int py = headCell / cols;
+            int qx = px + dirX;
+            int qy = py + dirY;
+            boolean bad = qx < 0 || qx >= cols || qy < 0 || qy >= rows;
+            int tailCell = body.get(body.size() - 1);
+            if (!bad) {
+                int cell = qy * cols + qx;
+                bad = body.contains(cell) && cell != tailCell;
+            }
+            boolean netFired = false;
+            if (bad) {
+                int[] safe = pilot.fallbackDirection(toArray(body));
+                if (safe != null) {
+                    dirX = safe[0];
+                    dirY = safe[1];
+                    netFired = true;
+                }
+            }
+            int head = body.get(0);
+            int chx = head % cols;
+            int chy = head / cols;
+            int nx = chx + dirX;
+            int ny = chy + dirY;
+            if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) {
+                wall = 1;
+                break;
+            }
+            int ni = ny * cols + nx;
+            boolean eats = ni == food;
+            if (!eats) {
+                body.remove(body.size() - 1);
+            }
+            if (body.contains(ni)) {
+                bites++;
+                if (biteLog != null && biteLog[0] == null) {
+                    biteLog[0] = "tick " + tick + " len " + body.size()
+                            + " hit(" + nx + "," + ny + ") food=" + food
+                            + " pilotBranch=" + pilotBranch
+                            + " nullMove=" + nullMove
+                            + " netFired=" + netFired
+                            + " hitWasTail=" + (ni == tailCell)
+                            + " dir=" + dirX + "," + dirY;
+                }
+                break;
+            }
+            body.add(0, ni);
+            maxLen = Math.max(maxLen, body.size());
+            if (eats) {
+                if (body.size() >= total) {
+                    winTick = tick;
+                    break;
+                }
+                food = spawnApp(pilot, body, cols, rows, rnd);
+            }
+        }
+        return new int[]{winTick >= 0 ? 1 : 0, bites, wall, winTick, maxLen, food};
+    }
+
+    /** GameView.spawnFood(): 12 attempts inside the arc, then any free cell. */
+    private static int spawnApp(AutoPilot pilot, ArrayList<Integer> body, int cols,
+                                int rows, Random rnd) {
+        int total = cols * rows;
+        int[] cells = toArray(body);
+        for (int attempt = 0; attempt < 12; attempt++) {
+            int arcPick = pilot.pickFoodCell(cells, rnd);
+            if (arcPick < 0) {
+                break;
+            }
+            if (pilot.foodReachable(cells, arcPick)) {
+                return arcPick;
+            }
+        }
+        int free = total - body.size();
+        if (free <= 0) {
+            return -1;
+        }
+        int pick = rnd.nextInt(free);
+        for (int c = 0; c < total; c++) {
+            if (!body.contains(c) && pick-- == 0) {
+                return c;
+            }
+        }
+        return -1;
+    }
+
+    /** Real app loop (safety net + spawn policy) on the device grid. */
+    private static void testAppStepPolicy() {
+        System.out.println();
+        System.out.println("APP LOOP (20x34, safety net + spawn policy)");
+        int bites = 0;
+        int wins = 0;
+        long[] seeds = {1L, 424242L, 99L};
+        for (long seed : seeds) {
+            AutoPilot p = new AutoPilot(20, 34, false, false, true);
+            String[] log = new String[1];
+            int[] r = runAppPolicy(p, seed, 20, 34, 120000, log);
+            bites += r[1];
+            wins += r[0];
+            System.out.printf("  seed=%-7d win=%d bites=%d wall=%d len=%d/680%s%n",
+                    seed, r[0], r[1], r[2], r[4],
+                    log[0] == null ? "" : ("  " + log[0]));
+        }
+        System.out.println();
+        check("app loop: the verified engine never bites", bites == 0);
+        check("app loop: the verified engine fills the board", wins == seeds.length);
+    }
+    /** Odd x odd board: no Hamiltonian cycle, the path planner must stay safe. */
+    private static void testOddBoardPath() {
+        int cols = 11;
+        int rows = 13;
+        System.out.println();
+        System.out.println("BFS BUTTON - odd board " + cols + "x" + rows + " (path planner)");
+        int bites = 0;
+        int wall = 0;
+        int wins = 0;
+        for (long seed : new long[]{5L, 1234L}) {
+            AutoPilot p = new AutoPilot(cols, rows, false, false, true);
+            int[] r = runCycle(p, seed, cols, rows, 6000);
+            bites += r[1];
+            wall += r[2];
+            wins += r[0];
+            System.out.printf("  seed=%-6d win=%d bites=%d wall=%d len=%d/%d%n",
+                    seed, r[0], r[1], r[2], r[5], cols * rows);
+        }
+        System.out.println();
+        check("odd board: the path planner fills the board", wins == 2);
+        check("odd board: no self bite (path planner)", bites == 0);
+        check("odd board: no wall death", wall == 0);
     }
 
     /** The fruit is never moved: it just spawns on a cell the head can walk to. */

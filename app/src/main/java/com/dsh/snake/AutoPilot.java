@@ -52,6 +52,22 @@ final class AutoPilot {
     private final boolean randomizeCycle;
     private final boolean useComb;
     private boolean combBuilt;
+    /** Verified-shortcut engine: BFS to the fruit + full-path safety simulation. */
+    private final boolean verified;
+    /**
+     * Proof gate of the verified engine: the shortcut is only accepted when it is
+     * exactly the next run of cells on the Hamiltonian cycle. Leaving the arc always
+     * leaves a hole behind the head and the run is eventually boxed in (measured:
+     * without this gate the snake dies at 24-129 / 240 cells on every seed).
+     */
+    private boolean proofGate = true;
+    /** Odd x odd boards have no Hamiltonian cycle: walk a Hamiltonian path instead. */
+    private boolean oddMode;
+    private int[] pathCell;
+    private int[] pathIdx;
+    private final int[] bfsQueue;
+    private final int[] bfsPrev;
+    private final int[] bfsDist;
     /** Toggle: allow safe shortcuts that leave the free arc. */
     private boolean smartShortcuts = true;
     /** Toggle: insert a detour when the head is right next to the tail. */
@@ -62,6 +78,13 @@ final class AutoPilot {
     private final boolean[] blocked;
     private final int[] queue;
     private int stepsToFood = -1;
+    /** Which branch produced the last move (diagnostics / tests). */
+    private int lastBranchId;
+    private static final int BRANCH_VERIFIED = 1;
+    private static final int BRANCH_ODD = 2;
+    private static final int BRANCH_CYCLE = 3;
+    private static final int BRANCH_SURVIVE = 4;
+    private static final int BRANCH_FALLBACK = 5;
 
     AutoPilot(int cols, int rows) {
         this(cols, rows, RANDOM_CYCLE_DEFAULT);
@@ -73,16 +96,32 @@ final class AutoPilot {
 
     /** @param combCycle true builds the comb (two-slab) cycle instead of the snake. */
     AutoPilot(int cols, int rows, boolean randomCycle, boolean combCycle) {
+        this(cols, rows, randomCycle, combCycle, false);
+    }
+
+    /**
+     * @param randomCycle random Hamiltonian cycle each run
+     * @param combCycle two-slab comb cycle instead of the single snake
+     * @param verifiedShortcuts BFS to the fruit + simulation of the whole snake;
+     *     the shortcut is taken only when every step stays safe, otherwise the
+     *     pilot keeps walking the Hamiltonian cycle (GUARANTEED mode)
+     */
+    AutoPilot(int cols, int rows, boolean randomCycle, boolean combCycle,
+            boolean verifiedShortcuts) {
         this.cols = cols;
         this.rows = rows;
         this.total = cols * rows;
         this.randomizeCycle = randomCycle;
         this.useComb = combCycle;
+        this.verified = verifiedShortcuts;
         cycleCell = new int[total];
         cycleIdx = new int[total];
         dist = new int[total];
         blocked = new boolean[total];
         queue = new int[total];
+        bfsQueue = new int[total];
+        bfsPrev = new int[total];
+        bfsDist = new int[total];
         buildCycle();
     }
 
@@ -91,6 +130,13 @@ final class AutoPilot {
     /* ------------------------------------------------------------------ */
 
     private void buildCycle() {
+        // A grid with both sides odd has no Hamiltonian cycle: fall back to a
+        // Hamiltonian PATH (boustrophedon) and let the path planner walk it.
+        if (((cols & 1) == 1) && ((rows & 1) == 1)) {
+            oddMode = true;
+            buildPathOrder();
+            return;
+        }
         int[] next = new int[total];
         combBuilt = false;
         boolean ok = randomizeCycle && randomCycle(next) && cycleValid(next);
@@ -131,6 +177,177 @@ final class AutoPilot {
         }
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Verified-shortcut engine ("GUARANTEED" mode)                       */
+    /* ------------------------------------------------------------------ */
+
+    /** Boustrophedon order used when the board has no Hamiltonian cycle (odd x odd). */
+    private void buildPathOrder() {
+        pathCell = new int[total];
+        pathIdx = new int[total];
+        int k = 0;
+        for (int y = 0; y < rows; y++) {
+            if ((y & 1) == 0) {
+                for (int x = 0; x < cols; x++) {
+                    pathCell[k++] = y * cols + x;
+                }
+            } else {
+                for (int x = cols - 1; x >= 0; x--) {
+                    pathCell[k++] = y * cols + x;
+                }
+            }
+        }
+        for (int i = 0; i < total; i++) {
+            pathIdx[pathCell[i]] = i;
+        }
+    }
+
+    /**
+     * Shortest path from the head to the fruit over free cells (the tail counts as
+     * free - it vacates this tick), or null when the fruit cannot be reached.
+     */
+    private int[] bfsFoodPath(int[] body, int food) {
+        if (food < 0 || body.length == 0) {
+            return null;
+        }
+        markBody(body);
+        blocked[body[body.length - 1]] = false;
+        if (blocked[food]) {
+            return null;
+        }
+        java.util.Arrays.fill(bfsDist, -1);
+        int head = body[0];
+        int qh = 0;
+        int qt = 0;
+        bfsQueue[qt++] = head;
+        bfsDist[head] = 0;
+        bfsPrev[head] = -1;
+        while (qh < qt) {
+            int cur = bfsQueue[qh++];
+            if (cur == food) {
+                break;
+            }
+            int cx = cur % cols;
+            int cy = cur / cols;
+            for (int k = 0; k < 4; k++) {
+                int nx = cx + DIRS[k][0];
+                int ny = cy + DIRS[k][1];
+                if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) {
+                    continue;
+                }
+                int n = ny * cols + nx;
+                if (bfsDist[n] >= 0 || blocked[n]) {
+                    continue;
+                }
+                bfsDist[n] = bfsDist[cur] + 1;
+                bfsPrev[n] = cur;
+                bfsQueue[qt++] = n;
+            }
+        }
+        int len = bfsDist[food];
+        if (len <= 0) {
+            return null;
+        }
+        int[] path = new int[len];
+        int cur = food;
+        for (int i = len - 1; i >= 0; i--) {
+            path[i] = cur;
+            cur = bfsPrev[cur];
+        }
+        return path;
+    }
+
+    /**
+     * Proof gate: the BFS path must be the cycle run itself, i.e. every step is the
+     * cycle successor of the previous cell. Any other path would leave a hole behind
+     * the head; the run then slowly gets boxed in (measured without this gate: every
+     * seed dies at 24-129 of 240 cells), so the shortcut is rejected and the pilot
+     * keeps walking the cycle.
+     */
+    private boolean followsCycle(int head, int[] path) {
+        int cur = head;
+        for (int cellInPath : path) {
+            if (cellInPath != cycleCell[(cycleIdx[cur] + 1) % total]) {
+                return false;
+            }
+            cur = cellInPath;
+        }
+        return true;
+    }
+
+    /**
+     * Walks the WHOLE virtual snake along {@code path} (growing on the fruit) and
+     * checks after every step that the tail is still reachable - that is the
+     * "formally proven safe" gate of the shortcut. Any collision or lost tail
+     * rejects the shortcut and the caller keeps walking the cycle.
+     */
+    private boolean simulateSafe(int[] body, int[] path, int food) {
+        int len = body.length;
+        int[] sim = java.util.Arrays.copyOf(body, len + 1);
+        for (int i = 0; i < path.length; i++) {
+            int next = path[i];
+            boolean eats = next == food;
+            if (eats) {
+                if (len + 1 > sim.length) {
+                    return false;
+                }
+                System.arraycopy(sim, 0, sim, 1, len);
+                sim[0] = next;
+                len++;
+            } else {
+                System.arraycopy(sim, 0, sim, 1, len - 1);
+                sim[0] = next;
+            }
+            for (int j = 1; j < len; j++) {
+                if (sim[j] == next) {
+                    return false;
+                }
+            }
+            int[] view = java.util.Arrays.copyOf(sim, len);
+            if (!tailReachable(view)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** True when the head can walk to its own tail through free cells. */
+    private boolean tailReachable(int[] body) {
+        if (body.length <= 2) {
+            return true;
+        }
+        markBody(body);
+        int head = body[0];
+        int tail = body[body.length - 1];
+        java.util.Arrays.fill(bfsDist, -1);
+        int qh = 0;
+        int qt = 0;
+        bfsQueue[qt++] = head;
+        bfsDist[head] = 0;
+        while (qh < qt) {
+            int cur = bfsQueue[qh++];
+            if (cur == tail) {
+                return true;
+            }
+            int cx = cur % cols;
+            int cy = cur / cols;
+            for (int k = 0; k < 4; k++) {
+                int nx = cx + DIRS[k][0];
+                int ny = cy + DIRS[k][1];
+                if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) {
+                    continue;
+                }
+                int n = ny * cols + nx;
+                if (bfsDist[n] >= 0 || (blocked[n] && n != tail)) {
+                    continue;
+                }
+                bfsDist[n] = bfsDist[cur] + 1;
+                bfsQueue[qt++] = n;
+            }
+        }
+        return false;
+    }
+
     /**
      * Rebuilds the cycle with a random divide-and-merge layout (union-find style:
      * build a small cycle per strip of rows, then merge neighbouring strips through
@@ -166,6 +383,11 @@ final class AutoPilot {
         if (!mergeStrips(next, mid, mid + 1)) {
             linkStrip(next, y0, y1);
         }
+    }
+
+    /** Turns the proof gate off (tests only): raw BFS shortcut + simulation. */
+    void setProofGate(boolean v) {
+        proofGate = v;
     }
 
     /** Safe-shortcut toggle: allow leaving the free arc when a simulation is safe. */
@@ -575,6 +797,17 @@ final class AutoPilot {
 
     /** Body cells for a fresh snake, laid out backwards along the cycle. */
     int[] initialBody(int length) {
+        if (oddMode && pathCell != null) {
+            // The body must cover the START of the path: the snake walks forward and
+            // every step eats, so nothing behind it ever becomes free again.
+            int startIdx = Math.max(length - 1, 0);
+            int[] out = new int[length];
+            for (int i = 0; i < length; i++) {
+                int k = Math.max(0, startIdx - i);
+                out[i] = pathCell[k];
+            }
+            return out;
+        }
         int start = cycleIdx[(rows / 2) * cols + cols / 2];
         int[] out = new int[length];
         for (int i = 0; i < length; i++) {
@@ -585,6 +818,13 @@ final class AutoPilot {
     }
 
     int[] firstDirection(int headCell) {
+        if (oddMode && pathCell != null && pathIdx != null) {
+            int at = pathIdx[headCell];
+            if (at + 1 < total) {
+                return dirTo(headCell, pathCell[at + 1]);
+            }
+            return null;
+        }
         int next = cycleCell[(cycleIdx[headCell] + 1) % total];
         return dirTo(headCell, next);
     }
@@ -593,6 +833,9 @@ final class AutoPilot {
     int arcSize(int[] body) {
         if (body.length == 0) {
             return 0;
+        }
+        if (oddMode && pathIdx != null) {
+            return Math.max(0, total - 1 - pathIdx[body[0]]);
         }
         int tailDist = forward(cycleIdx[body[0]], cycleIdx[body[body.length - 1]]);
         return tailDist == 0 ? total : tailDist;
@@ -606,8 +849,45 @@ final class AutoPilot {
         if (body.length == 0) {
             return null;
         }
+        lastBranchId = 0;
         int head = body[0];
         int tail = body[body.length - 1];
+        int hx0 = head % cols;
+        int hy0 = head / cols;
+
+        // GUARANTEED mode: try a shortcut to the fruit only when the shortcut keeps
+        // the snake on its Hamiltonian arc (the proof gate) AND the whole snake,
+        // simulated along the whole path, stays safe at every step. Otherwise the
+        // pilot keeps walking the cycle, which always fills the board.
+        if (verified && !oddMode && food >= 0) {
+            int[] path = bfsFoodPath(body, food);
+            boolean proven = path != null && simulateSafe(body, path, food);
+            if (proven && proofGate) {
+                proven = followsCycle(head, path);
+            }
+            if (proven) {
+                stepsToFood = path.length;
+                lastBranchId = BRANCH_VERIFIED;
+                return new int[]{path[0] % cols - hx0, path[0] / cols - hy0};
+            }
+        }
+        // Odd x odd board: no cycle, walk the Hamiltonian path forward.
+        if (oddMode) {
+            markBody(body);
+            int idx = pathIdx[head];
+            for (int i = idx + 1; i < total; i++) {
+                int n = pathCell[i];
+                if (blocked[n] && n != tail) {
+                    continue;
+                }
+                if (body.length > 2 && n == body[1]) {
+                    continue;
+                }
+                lastBranchId = BRANCH_ODD;
+                return new int[]{n % cols - hx0, n / cols - hy0};
+            }
+            return null;
+        }
 
         markBody(body);
         int hIdx = cycleIdx[head];
@@ -645,6 +925,11 @@ final class AutoPilot {
             if (d == 0 || d > tailDist) {
                 continue;
             }
+            // SC off: never use the "step onto the vacating tail" shortcut; only
+            // proper forward progress inside the free arc is allowed.
+            if (d == tailDist && !smartShortcuts) {
+                continue;
+            }
             // Stepping on the tail only works when it moves away (no fruit there).
             if (blocked[n] && !(n == tail && n != food)) {
                 continue;
@@ -655,6 +940,12 @@ final class AutoPilot {
             }
             if (d == tailDist) {
                 score += 4_000;
+            }
+            if (zigzagOn) {
+                // ZZ: a longer route of short hops instead of one long jump. The
+                // snake weaves along the cycle, which keeps the free arc bigger for
+                // a few moves longer; still forward-only, so it can never bite.
+                score += (total - d) * 3;
             }
             candCell[candN] = n;
             candDx[candN] = nx - hx;
@@ -676,9 +967,90 @@ final class AutoPilot {
             }
         }
         if (pick >= 0) {
+            lastBranchId = BRANCH_CYCLE;
             return new int[]{candDx[pick], candDy[pick]};
         }
+        if (verified) {
+            // Off the arc (after a verified shortcut) there may be no forward move
+            // at all: keep the run alive with the widest open region instead.
+            int[] mv = survivalMove(body, food, hx, hy);
+            if (mv != null) {
+                lastBranchId = BRANCH_SURVIVE;
+                return mv;
+            }
+        }
+        lastBranchId = BRANCH_FALLBACK;
         return firstDirection(head);
+    }
+
+    /**
+     * Best effort move when the cycle gives no forward step: the free neighbour that
+     * keeps the biggest open region reachable (widest-open greedy).
+     */
+    private int[] survivalMove(int[] body, int food, int hx, int hy) {
+        int[] best = null;
+        int bestArea = -1;
+        for (int k = 0; k < 4; k++) {
+            int nx = hx + DIRS[k][0];
+            int ny = hy + DIRS[k][1];
+            if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) {
+                continue;
+            }
+            int n = ny * cols + nx;
+            int[] step = new int[]{n};
+            if (!simulateSafe(body, step, food)) {
+                continue;
+            }
+            int area = freeAreaAfter(body, n, food);
+            if (area > bestArea) {
+                bestArea = area;
+                best = new int[]{DIRS[k][0], DIRS[k][1]};
+            }
+        }
+        return best;
+    }
+
+    /** Free cells still reachable from the head after stepping onto {@code next}. */
+    private int freeAreaAfter(int[] body, int next, int food) {
+        boolean eats = next == food;
+        int len = body.length + (eats ? 1 : 0);
+        int[] view = new int[len];
+        view[0] = next;
+        int copy = eats ? body.length : body.length - 1;
+        if (copy < 0) {
+            copy = 0;
+        }
+        System.arraycopy(body, 0, view, 1, copy);
+        markBody(view);
+        java.util.Arrays.fill(bfsDist, -1);
+        int qh = 0;
+        int qt = 0;
+        bfsQueue[qt++] = next;
+        bfsDist[next] = 0;
+        while (qh < qt) {
+            int cur = bfsQueue[qh++];
+            int cx = cur % cols;
+            int cy = cur / cols;
+            for (int k = 0; k < 4; k++) {
+                int ax = cx + DIRS[k][0];
+                int ay = cy + DIRS[k][1];
+                if (ax < 0 || ax >= cols || ay < 0 || ay >= rows) {
+                    continue;
+                }
+                int a = ay * cols + ax;
+                if (bfsDist[a] >= 0 || blocked[a]) {
+                    continue;
+                }
+                bfsDist[a] = bfsDist[cur] + 1;
+                bfsQueue[qt++] = a;
+            }
+        }
+        return qt - 1;
+    }
+
+    /** Which branch produced the last move: 1 verified, 2 odd path, 3 cycle, 4 survive. */
+    int lastBranchId() {
+        return lastBranchId;
     }
 
     /**
@@ -883,6 +1255,21 @@ final class AutoPilot {
 
     /** Fruit cell inside the free arc ahead of the head. */
     int pickFoodCell(int[] body, java.util.Random rnd) {
+        if (oddMode) {
+            // Odd x odd board: the snake walks a Hamiltonian PATH, so the fruit has to
+            // sit on the very next path cell. Every step then eats, the tail never
+            // retires and the body covers the whole path - the only way a path (which
+            // cannot close into a loop) can fill the board.
+            int head = body.length > 0 ? body[0] : -1;
+            if (head < 0 || pathIdx == null) {
+                return -1;
+            }
+            int hi = pathIdx[head];
+            if (hi + 1 >= total) {
+                return -1;
+            }
+            return pathCell[hi + 1];
+        }
         int n = body.length;
         if (n == 0 || n >= total) {
             return -1;
