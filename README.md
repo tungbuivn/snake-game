@@ -20,6 +20,9 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      thì rắn tự đứng lại. Chưa bấm `MOVE` thì rắn **không di chuyển**.
      Nút **`PREVIEW`** xem lại route **hiện tại** như một đoạn video (bóng xanh cyan chạy
      trên route, rắn thật đứng yên); thoát replay là chơi tiếp bình thường.
+     Nếu **route chạy qua một waypoint khác** (đi ngang qua điểm vàng/điểm khác trước khi
+     tới lượt) thì app đánh dấu **`BROKEN`**: dấu ✕ đỏ ngay trên waypoint đó + dòng cảnh
+     báo hồng ở thanh dưới (`BROKEN tại #3,#5`) để bạn đổi lại thứ tự.
      Khi chọn 1 waypoint, app vẽ thêm **bóng rắn màu cam mờ**, **vẽ đè lên trên rắn thật**
      và **luôn đủ chiều dài thân**: đầu ở waypoint, thân đi ngược theo route; nếu route
      ngắn hơn thân thì phần còn lại lấy tiếp từ các đốt hiện có (đuôi thật) — nhờ vậy
@@ -28,9 +31,15 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      qua, ô đó thường đã trống).
   2. `AUTO WIN` — **một** chu trình Hamilton **cố định** phủ toàn board (boustrophedon),
      luôn thắng, 0 chết.
-  3. `SHORT PATH` — chỉ BFS đường ngắn nhất tới quả (ngocbh style: virtual-eat + kiểm
-     tra đuôi + bám đuôi khi bí); quả sinh **random**; đâm vào thân thì **cắt đuôi**
-     (xem mục “cắn thân”) và chạy tiếp; hết ô trống cũng tính là thắng.
+  3. `SHORT PATH` — **ăn quả nhưng phải còn đường bám đuôi**:
+     1. BFS đường ngắn nhất tới quả; **bước kế tiếp** và **trạng thái sau khi ăn** (rắn ảo
+        dài thêm 1 đốt) đều phải **còn đường tới đuôi** + **vùng trống đủ chỗ cho cả thân**
+        → chỉ khi qua cả hai mới đi.
+     2. Không qua thì thử lại với đường "dài" (zig-zag 2 ô). Vẫn không qua thì **không ăn
+        vội**: cứ **bám đuôi** (đường zig-zag tới đuôi — luôn an toàn) cho tới khi tìm được
+        phương án ăn an toàn khác.
+     3. Cuối cùng: chọn ô trống giữ được đường tới đuôi với nhiều không gian nhất.
+     Quả sinh **random**; nếu vẫn bị dồn vào thế bí thì cắt đuôi và chạy tiếp.
   4. `MANGO` — bản MangoSnake: **mỗi ván một chu trình Hamilton ngẫu nhiên** (250 lượt
      split + mend), cùng luật đi an toàn như `AUTO WIN`, quả sinh random trong cung →
      cũng **luôn thắng**. Đo 60s: 62 quả, avg 0.93s, 20 lượt cuối avg 0.60s, max 2.5s,

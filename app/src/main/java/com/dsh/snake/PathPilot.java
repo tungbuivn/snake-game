@@ -4,25 +4,26 @@ import java.util.ArrayList;
 import java.util.Arrays;
 
 /**
- * "SHORT PATH" mode, modelled on github.com/ngocbh/snake (BFS/A* + Greedy):
+ * "SHORT PATH" mode: plan a route to the fruit, but only accept it when the
+ * snake can still reach its own tail afterwards - "eat the fruit, keep a way to
+ * follow the tail", so the run cannot get trapped.
  *
- *  1. Shortest path (BFS, Manhattan-consistent so it equals A* on a grid) to the
- *     fruit.
- *  2. Send a virtual snake along it; if the virtual head can still reach its own
- *     tail afterwards, follow the fruit path.
- *  3. Otherwise follow the tail, using the "longest path" trick: the shortest
- *     path is expanded with 2-cell zig-zags so the snake spirals instead of
- *     beelining into its tail.
- *  4. If the tail is unreachable, walk a long path towards the fruit.
- *  5. Otherwise wander (2-cell lookahead, then any free neighbour).
- *
- * There is no formal safety guarantee: if the snake still bites itself the game
- * cuts the body from the bite back to the tail (see GameView.biteSelf) and the
- * run continues - this mode is just for watching the snake eat.
+ *  1. BFS shortest path to the fruit.
+ *  2. Simulate eating it (the virtual snake grows on the fruit) and check that
+ *     the virtual tail is still reachable. If yes, take the first step.
+ *  3. If that fails, retry with the expanded ("longest path") variant, which
+ *     spirals instead of beelining into the body.
+ *  4. No fruit plan survives: follow the tail along an expanded path - always
+ *     safe, because the tail keeps moving away.
+ *  5. Last resort: the free neighbour that keeps the tail reachable with the
+ *     most open room; if even that fails, wander.
  */
 final class PathPilot {
 
     private static final int[][] DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+    /** Longest fruit route that is accepted; it is validated step by step. */
+    private static final int MAX_PLAN = 300;
 
     private final int cols;
     private final int rows;
@@ -31,7 +32,13 @@ final class PathPilot {
     private final int[] dist;
     private final int[] parent;
     private final int[] queue;
+    private boolean[] scratch;
     private int lastSteps = -1;
+    private String lastBranch = "";
+
+    String lastBranch() {
+        return lastBranch;
+    }
 
     PathPilot(int cols, int rows) {
         this.cols = cols;
@@ -41,6 +48,7 @@ final class PathPilot {
         dist = new int[total];
         parent = new int[total];
         queue = new int[total];
+        scratch = new boolean[total];
     }
 
     int getStepsToFood() {
@@ -53,76 +61,198 @@ final class PathPilot {
         }
         int head = body[0];
         int tail = body[body.length - 1];
-        markBody(body);
 
+        // 1. shortest route to the fruit
+        markBody(body);
         int[] toFood = bfs(head, food);
         lastSteps = toFood.length > 0 ? toFood.length : -1;
 
-        // 1+2: shortest path, accepted if the virtual snake can still reach its tail.
-        if (toFood.length > 0) {
-            int[] virtualBody = simulate(body, toFood);
-            markBody(virtualBody);
-            boolean canReachTail = bfs(virtualBody[0], virtualBody[virtualBody.length - 1]).length > 0;
-            if (canReachTail || body.length <= 2) {
-                markBody(body);
+        // 2. eat it only if EVERY step of the route keeps the tail reachable
+        //    (checking just "after eating" is not enough: the route may pass
+        //    through a pocket where the tail is already lost) and the state right
+        //    after the fruit is safe as well.
+        if (toFood.length > 0 && body.length > 2) {
+            boolean ok = routeSafe(body, toFood, food, MAX_PLAN)
+                    && tailReachable(simulateEat(body, toFood, food));
+            if (ok) {
+                lastBranch = "food-bfs";
                 return dirTo(head, toFood[0]);
             }
+        } else if (toFood.length > 0) {
+            lastBranch = "food-tiny";
+            return dirTo(head, toFood[0]);
         }
-        markBody(body);
 
-        // 3: follow the tail, along an expanded (longer, winding) path.
-        int[] toTail = expand(body, head, bfs(head, tail));
-        if (toTail.length > 0) {
+        // 3. same plan, but along the expanded (winding) route
+        markBody(body);
+        int[] longFood = expand(body, head, bfs(head, food));
+        if (longFood.length > 0 && body.length > 2) {
+            boolean ok = routeSafe(body, longFood, food, MAX_PLAN)
+                    && tailReachable(simulateEat(body, longFood, food));
+            if (ok) {
+                lastBranch = "food-long";
+                return dirTo(head, longFood[0]);
+            }
+        }
+
+        // 4. follow the tail, always re-validated step by step: first the direct
+        //    (monotone) route, then the expanded zig-zag route
+        markBody(body);
+        int[] direct = bfs(head, tail);
+        if (direct.length > 0 && routeSafe(body, direct, -1, MAX_PLAN)) {
+            lastBranch = "tail-direct";
+            return dirTo(head, direct[0]);
+        }
+        int[] toTail = expand(body, head, direct);
+        if (toTail.length > 0 && routeSafe(body, toTail, -1, MAX_PLAN)) {
+            lastBranch = "tail-expanded";
             return dirTo(head, toTail[0]);
         }
 
-        // 4: head towards the fruit along a long path.
-        int[] longFood = expand(body, head, bfs(head, food));
-        if (longFood.length > 0) {
-            return dirTo(head, longFood[0]);
-        }
-
-        // 5: wander with a two-cell lookahead, then any free neighbour.
+        // 5. any neighbour that keeps the tail reachable, roomiest first. The
+        // candidates are collected first: tailReachable()/floodArea() overwrite
+        // the occupancy map, so reading it per candidate would pick body cells.
+        markBody(body);
         int hx = head % cols;
         int hy = head / cols;
+        int[] cand = new int[4];
+        int[] candDelta = new int[4];
+        int candN = 0;
         for (int k = 0; k < 4; k++) {
             int nx = hx + DIRS[k][0];
             int ny = hy + DIRS[k][1];
-            int fx = hx + 2 * DIRS[k][0];
-            int fy = hy + 2 * DIRS[k][1];
-            if (!inside(nx, ny) || !inside(fx, fy)) {
+            if (!inside(nx, ny)) {
                 continue;
             }
-            if (!blocked[ny * cols + nx] && !blocked[fy * cols + fx]) {
-                return new int[]{DIRS[k][0], DIRS[k][1]};
+            int n = ny * cols + nx;
+            boolean isTail = n == tail;
+            if (blocked[n] && !isTail) {
+                continue;
+            }
+            cand[candN] = n;
+            candDelta[candN] = k;
+            candN++;
+        }
+        int[] bestDir = null;
+        int bestArea = -1;
+        for (int i = 0; i < candN; i++) {
+            int n = cand[i];
+            int[] next = moveVirtual(body, n, n == food);
+            if (!tailReachable(next)) {
+                continue;
+            }
+            int area = floodArea(next[0], next);
+            if (area > bestArea) {
+                bestArea = area;
+                int k = candDelta[i];
+                bestDir = new int[]{DIRS[k][0], DIRS[k][1]};
             }
         }
-        for (int k = 0; k < 4; k++) {
-            int nx = hx + DIRS[k][0];
-            int ny = hy + DIRS[k][1];
-            if (inside(nx, ny) && !blocked[ny * cols + nx]) {
-                return new int[]{DIRS[k][0], DIRS[k][1]};
+        if (bestDir == null) {
+            // Lenient pass: the pocket is small because the board is nearly full,
+            // but the tail is still reachable - better than wandering blindly.
+            for (int i = 0; i < candN; i++) {
+                int n = cand[i];
+                int[] next = moveVirtual(body, n, n == food);
+                if (tailReachable(next, false)) {
+                    int k = candDelta[i];
+                    bestDir = new int[]{DIRS[k][0], DIRS[k][1]};
+                    break;
+                }
             }
         }
-        return null;
+        markBody(body);
+        if (bestDir != null) {
+            lastBranch = "neighbour-area";
+            return bestDir;
+        }
+        lastBranch = "wander";
+        return wander(head);
     }
 
     /* ------------------------------------------------------------------ */
     /* Virtual snake                                                      */
     /* ------------------------------------------------------------------ */
 
-    /** Body after following the path (length kept, tail moves along the path). */
-    private int[] simulate(int[] body, int[] path) {
+    /**
+     * True when walking the route never loses the tail (the classic "keep a way
+     * to follow the tail" rule, checked at every single step, not just at the
+     * end). Routes longer than {@link #MAX_PLAN} are rejected outright, so every
+     * accepted plan is fully validated.
+     */
+    private boolean routeSafe(int[] body, int[] path, int food, int maxSteps) {
+        if (path.length > maxSteps) {
+            return false;
+        }
+        int[] cur = body;
+        for (int i = 0; i < path.length; i++) {
+            boolean eat = path[i] == food && i == path.length - 1;
+            cur = moveVirtual(cur, path[i], eat);
+            if (!tailReachable(cur)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Body after walking the whole path (grows by one on the fruit). */
+    private int[] simulateEat(int[] body, int[] path, int food) {
         int n = body.length;
-        int[] nb = new int[n];
+        int[] nb = new int[n + 1];
         System.arraycopy(body, 0, nb, 0, n);
-        for (int cell : path) {
-            for (int i = n - 1; i >= 1; i--) {
-                nb[i] = nb[i - 1];
+        int len = n;
+        for (int i = 0; i < path.length; i++) {
+            int cell = path[i];
+            boolean eat = cell == food && i == path.length - 1;
+            if (eat) {
+                for (int k = len - 1; k >= 0; k--) {
+                    nb[k + 1] = nb[k];
+                }
+                len++;
+            } else {
+                for (int k = len - 1; k >= 1; k--) {
+                    nb[k] = nb[k - 1];
+                }
             }
             nb[0] = cell;
         }
+        return Arrays.copyOf(nb, len);
+    }
+
+    /** One step of a virtual snake (the tail only frees up when not eating). */
+    private int[] moveVirtual(int[] body, int cell, boolean eat) {
+        int n = body.length;
+        int len = eat ? n + 1 : n;
+        int[] nb = new int[len];
+        nb[0] = cell;
+        int keep = Math.min(eat ? n : n - 1, len - 1);
+        for (int i = 0; i < keep; i++) {
+            nb[i + 1] = body[i];
+        }
         return nb;
+    }
+
+    /**
+     * True when the head can reach the tail through free cells <em>and</em> the
+     * open pocket is at least as big as the body, so the snake cannot slowly
+     * seal itself in.
+     */
+    private boolean tailReachable(int[] body) {
+        return tailReachable(body, true);
+    }
+
+    private boolean tailReachable(int[] body, boolean requireArea) {
+        if (body.length <= 2) {
+            return true;
+        }
+        markBody(body);
+        if (bfs(body[0], body[body.length - 1]).length == 0) {
+            return false;
+        }
+        if (!requireArea) {
+            return true;
+        }
+        return floodArea(body[0], body) >= body.length;
     }
 
     /* ------------------------------------------------------------------ */
@@ -155,7 +285,6 @@ final class PathPilot {
                 i++;
                 continue;
             }
-            // Perpendicular neighbours of u and v form a 2-cell detour.
             int lx = -dir[1];
             int ly = dir[0];
             int ul = cell(u, lx, ly);
@@ -165,7 +294,7 @@ final class PathPilot {
                 used[vl] = true;
                 out.add(i, ul);
                 out.add(i + 1, vl);
-                continue;   // process the inserted detour again
+                continue;
             }
             int rx = dir[1];
             int ry = -dir[0];
@@ -223,6 +352,45 @@ final class PathPilot {
             }
         }
         return null;
+    }
+
+    /** Size of the open region reachable from {@code start} around a body. */
+    private int floodArea(int start, int[] body) {
+        markBody(body);
+        markForFlood(body);
+        Arrays.fill(dist, -1);
+        int qh = 0;
+        int qt = 0;
+        queue[qt++] = start;
+        dist[start] = 0;
+        int area = 0;
+        while (qh < qt) {
+            int cur = queue[qh++];
+            area++;
+            int cx = cur % cols;
+            int cy = cur / cols;
+            for (int k = 0; k < 4; k++) {
+                int nx = cx + DIRS[k][0];
+                int ny = cy + DIRS[k][1];
+                if (!inside(nx, ny)) {
+                    continue;
+                }
+                int n = ny * cols + nx;
+                if (dist[n] >= 0 || scratch[n]) {
+                    continue;
+                }
+                dist[n] = dist[cur] + 1;
+                queue[qt++] = n;
+            }
+        }
+        return area;
+    }
+
+    private void markForFlood(int[] body) {
+        Arrays.fill(scratch, false);
+        for (int c : body) {
+            scratch[c] = true;
+        }
     }
 
     private boolean inside(int x, int y) {

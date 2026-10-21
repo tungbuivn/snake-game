@@ -1248,6 +1248,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             if (d != null) {
                 dirX = d[0];
                 dirY = d[1];
+            } else if (pathPilot != null && mode == MODE_SHORTPATH) {
+                // The planner could not decide: never keep a stale direction, that
+                // is exactly how the snake would bite itself.
+                int[] alt = pathPilot.fallbackDirection(cellsToArray());
+                if (alt != null) {
+                    dirX = alt[0];
+                    dirY = alt[1];
+                }
             }
             // SHORT PATH: if the chosen step leaves the board, turn to another
             // free direction instead of dying. Biting the body is fine (it is
@@ -1330,6 +1338,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             // Biting itself is a death, but the run keeps going: the body is cut
             // from the collision cell back to the tail, the death counter grows
             // and the snake changes colour (every mode, not just SHORT PATH).
+            logLine("BITE dir=" + dirX + "," + dirY + " head=" + hx + "," + hy
+                    + " hit=" + nx + "," + ny + " len=" + body.size()
+                    + " food=" + foodCell
+                    + " branch=" + (pathPilot != null ? pathPilot.lastBranch() : "-"));
             biteSelf(ni);
             registerDeath("bite");
             spawnDeathFx(nx, ny);
@@ -2397,6 +2409,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (waypoints.isEmpty()) {
             return;
         }
+        boolean[] broken = brokenWaypoints();
         float half = cell / 2f;
         for (int i = 0; i < waypoints.size(); i++) {
             int wp = waypoints.get(i);
@@ -2407,7 +2420,67 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             c.drawCircle(tx, ty, r, wpFillPaint);
             c.drawCircle(tx, ty, r, sel ? wpSelPaint : wpStrokePaint);
             c.drawText(String.valueOf(i + 1), tx, ty + dp(3.4f), wpTextPaint);
+            if (broken[i]) {
+                // The route runs over this point before its turn: mark it broken.
+                float k = cell * 0.42f;
+                c.drawLine(tx - k, ty - k, tx + k, ty + k, padDelPaint);
+                c.drawLine(tx + k, ty - k, tx - k, ty + k, padDelPaint);
+            }
         }
+    }
+
+    /**
+     * Marks the waypoints that the planned route runs over out of order (a leg
+     * passes through a waypoint that is not its own start/end), which the player
+     * must fix by reordering.
+     */
+    private boolean[] brokenWaypoints() {
+        int n = waypoints.size();
+        boolean[] broken = new boolean[n];
+        if (n < 2 || body.isEmpty()) {
+            return broken;
+        }
+        int cur = body.peekFirst();
+        for (int i = 0; i < n; i++) {
+            int to = waypoints.get(i);
+            int cx = cur % COLS;
+            int cy = cur / COLS;
+            int tx = to % COLS;
+            int ty = to / COLS;
+            while (cx != tx) {
+                cx += Integer.compare(tx, cx);
+                markCrossed(broken, cy * COLS + cx, i);
+            }
+            while (cy != ty) {
+                cy += Integer.compare(ty, cy);
+                markCrossed(broken, cy * COLS + cx, i);
+            }
+            cur = to;
+        }
+        return broken;
+    }
+
+    private void markCrossed(boolean[] broken, int cell, int leg) {
+        for (int j = 0; j < waypoints.size(); j++) {
+            if (j != leg && waypoints.get(j) == cell) {
+                broken[j] = true;
+            }
+        }
+    }
+
+    /** Labels of the broken waypoints (1-based) for the hint line. */
+    private String brokenLabel() {
+        boolean[] broken = brokenWaypoints();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < broken.length; i++) {
+            if (broken[i]) {
+                if (sb.length() > 0) {
+                    sb.append(',');
+                }
+                sb.append(i + 1);
+            }
+        }
+        return sb.toString();
     }
 
     /**
@@ -2885,6 +2958,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void drawBottomBar(Canvas c) {
         String hint;
+        String broken = "";
         if (autoMode) {
             hint = "AI đang chơi — chạm badge để tự điều khiển";
         } else if (mode == MODE_MANUAL) {
@@ -2895,11 +2969,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             } else {
                 hint = "Bấm MOVE để chạy";
             }
+            broken = brokenLabel();
+            if (broken.length() > 0) {
+                hint = "BROKEN tại #" + broken + "  •  đổi thứ tự waypoint";
+            }
         } else {
             hint = "Vuốt để điều khiển";
         }
         hint += "  •  Chết: " + deaths;
+        hintPaint.setColor(broken.length() > 0 ? 0xFFFF8FA3 : 0xFF647699);
         c.drawText(hint, boardLeft + dp(2f), pauseCy + dp(4.5f), hintPaint);
+        hintPaint.setColor(0xFF647699);
         if (!autoMode && mode == MODE_MANUAL) {
             drawMoveButton(c);
         }
