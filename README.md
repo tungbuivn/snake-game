@@ -40,42 +40,24 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      bấm 1 lần rồi chạm lên **một đốt trên thân** để chọn **điểm dừng** — rắn bám đuôi tới
      khi đầu tới đúng điểm đó thì dừng (bấm lần nữa để chạy bám đuôi không điểm dừng, hoặc
      bấm `STOP` để dừng tay).
-  2. `AUTO WIN` — **một** chu trình Hamilton **cố định** phủ toàn board (boustrophedon),
-     luôn thắng, 0 chết.
-  3. `SHORT PATH` — **chu trình Hamilton kiểu "comb"** (2 dải ghép: mỗi nửa bàn là một dải
-     boustrophedon, rồi nối thành một vòng kín — `AutoPilot(..., comb=true)`):
-     1. Mỗi tick rắn chỉ đi **tiến trên chu trình**, trong **cung trống giữa đầu và đuôi**;
-        quả sinh trong cung đó nên **luôn tới được** và **không bao giờ bị dời**.
-     2. Trong cung, rắn đi **đường BFS ngắn nhất tới quả** (tắt đường trên chu trình).
-     3. Thân luôn là một **đoạn liền trên chu trình** và chỉ dài thêm khi ăn → cung trống co
-        dần đều → **điền kín 240/240 ô** = **thắng**, **0 cắn thân, 0 đâm tường**.
-     Test `WIN RUN` xác nhận: **2 seed × 240/240 ô**, `winTick ≈ 4.3–4.7k` tick (~1 s/quả),
-     `bites=0`, `wall=0`, và `isComb()=true`.
-     (So sánh: `AUTO WIN` dùng chu trình boustrophedon 1 dải, `winTick ≈ 3.4–3.8k`; `MANGO`
-     dùng chu trình ngẫu nhiên 2-opt. Cả ba đều thắng.)
+  2. `AUTOPLAY` — AI đi **chu trình Hamilton** (boustrophedon cố định) phủ toàn board:
+     mỗi tick rắn **chỉ đi tiến trên chu trình**, trong **cung trống giữa đầu và đuôi**;
+     quả sinh trong cung đó nên **luôn tới được** và **không bao giờ bị dời**; thân là một
+     đoạn liền trên chu trình và chỉ dài thêm khi ăn → cung trống co dần đều → **điền kín
+     bàn** = **thắng**, **0 cắn thân, 0 đâm tường**.
+     Ba nút toggle đổi biến thể mà **không cần chọn mode**:
+     - `SC` — **shortcut an toàn** (mặc định BẬT): cho phép rời chu trình khi rẽ tắt, nhưng
+       chạy **rắn ảo `len + 5` bước** trên bản mô phỏng — không tự cắn thì mới đi, và chọn
+       hướng có **cost map** (số bước theo chu trình tới quả) nhỏ nhất.
+     - `ZZ` — **longer path / zig-zag** khi đầu sát đuôi (thêm khoảng trống cho thân).
+     - `RND` — **chu trình ngẫu nhiên**: dựng lại bằng **divide & conquer + merge 2×2**
+       (mỗi lần đều `cycleValid`) rồi chơi lại trên chu trình mới.
+     Test `WIN RATE`: **20 seed × 4 biến thể × 2 cỡ bàn = 160 ván → 100% thắng, 0 chết**
+     (`winTick` TB 20×12: snake 3.448, randmerge 3.930; 20×30: snake 14.236, randmerge 22.500).
      **Vì sao bỏ greedy**: greedy "đường ngắn nhất + bám đuôi" đo được 645 quả/12k tick
      nhưng **tự bịt túi** rồi phải cắn thân (19–38 lần/ván) — không thể chứng minh thắng.
      Spiral/lawnmower dựng động cũng đã thử: spiral là **đường hở**, không khép vòng được
      nên không điền kín bàn (chỉ đạt 10–13/240 ô).
-  4. `MANGO` — bản MangoSnake: **mỗi ván một chu trình Hamilton ngẫu nhiên** (250 lượt
-     split + mend), cùng luật đi an toàn như `AUTO WIN`, quả sinh random trong cung →
-     cũng **luôn thắng**. Đo 60s: 62 quả, avg 0.93s, 20 lượt cuối avg 0.60s, max 2.5s,
-     100% ≤3s, **0 chết**, không kẹt.
-- **3 tính năng AI thêm (nút `SC` / `ZZ` / `RND`)**, tham khảo các project snake AI:
-  - `SC` **shortcut an toàn** (perfect-snake-challenge): rời chu trình khi rẽ tắt, nhưng
-    chạy **rắn ảo `len + 5` bước** trên bản mô phỏng — không tự cắn thì mới đi; chọn hướng
-    có **cost map** (số bước theo chu trình tới quả) nhỏ nhất.
-  - `ZZ` **longer path / zig-zag** (chuyangliu/snake): khi đầu **sát đuôi** thì chèn bước
-    ngang an toàn để thân có thêm khoảng trống, tránh vòng bám đuôi bí.
-  - `RND` **chu trình ngẫu nhiên** bằng **divide & conquer các dải + merge 2×2** (mỗi lần
-    dựng đều `cycleValid`), rồi chơi lại trên chu trình mới.
-  - Test `AI TOGGLES` (20×12): **mọi biến thể vẫn điền kín 240/240, bites=0, wall=0**
-    (so sánh `winTick`: comb ≈ 4.3–4.7k, comb+zz ≈ 4.3–4.7k, randmerge ≈ 4.0–4.4k).
-  - Test `WIN RATE` (20 seed × 4 biến thể × 2 cỡ bàn = **160 ván**): **100% thắng**,
-    bites=0, wall=0. Trung bình `winTick`: 20×12 — snake 3.448, randmerge 3.930,
-    comb 4.205; 20×30 — snake 14.236, comb 16.962, randmerge 22.500.
-    Lưu ý: `ZZ` (zig-zag) hiếm khi kích hoạt trong kiểu chạy chu trình (đầu hiếm khi sát
-    đuôi theo ô), nên chưa thấy khác biệt số đo — vẫn giữ làm toggle.
 - **Quả sinh ngẫu nhiên, mỗi quả một lần**: chọn 1 ô trống ngẫu nhiên (trong cung trống
   của chu trình → luôn tới được), **không sinh lại liên tục** nên quả không nhấp nháy.
 - **Cắn thân = một lần chết nhưng không dừng ván**: khi đầu đâm vào thân (mọi chế độ),
@@ -206,11 +188,11 @@ kín), không bao giờ cắn vào cổ, và in ra bảng từng lần cắn (`t
 | `MOVE` / `DỪNG` (thanh dưới) | Cho rắn chạy theo route / dừng lại để sửa |
 | `−` / `+` (góc dưới-phải) | **Tốc độ chạy**: mỗi lần bấm đổi 1 nấc `0.5× · 0.75× · 1× · 1.5× · 2× · 3×` (giữa hai nút hiện số hiện tại). Tốc độ chia tick interval nên áp dụng cho **cả chơi tay lẫn AI**, lưu lại cho lần mở sau |
 | `SC` / `ZZ` / `RND` (hàng trên nút tốc độ) | **3 toggle AI**: `SC` = cho phép **shortcut an toàn** rời chu trình (mô phỏng rắn ảo `len+5` bước, không cắn thân thì mới đi — ý tưởng từ [perfect-snake-challenge](https://github.com/LPRowe/perfect-snake-challenge)); `ZZ` = **zig-zag / longer path** khi đầu sát đuôi (ý tưởng từ [chuyangliu/snake](https://github.com/chuyangliu/snake)); `RND` = **dựng lại chu trình Hamilton ngẫu nhiên** (divide-and-merge các dải, có validate) rồi chơi lại. Test `AI TOGGLES` xác nhận cả 3 biến thể vẫn điền kín 240/240, 0 cắn, 0 chết tường |
-| Menu tạm dừng | `TIẾP TỤC` để chạy tiếp; chạm **AUTO WIN / SHORT PATH / MANGO** = **bật lại AI cho đúng ván đang chơi** (giữ điểm) — kể cả khi bạn vừa vuốt/chạm badge để giành quyền điều khiển tay; nếu ván đang ở chế độ khác thì nút đó sẽ chơi lại ở chế độ mới |
+| Menu tạm dừng | `TIẾP TỤC` để chạy tiếp; chạm **AUTOPLAY** = **bật lại AI cho ván đang chơi** (giữ điểm) — kể cả khi bạn vừa chạm badge để giành quyền điều khiển tay |
 | Vuốt 4 hướng (chế độ AI) | Chuyển sang tự điều khiển (rắn đứng chờ waypoint) |
-| Chạm `CHƠI` / `AUTO WIN` / `SHORT PATH` / `MANGO` | Bắt đầu chế độ tương ứng (4 nút xếp dọc) |
+| Chạm `CHƠI` / `AUTOPLAY` | Bắt đầu chơi tay (waypoint) hoặc để AI autoplay (2 nút xếp dọc) |
 | Chạm `❚❚` (góc dưới phải) | Tạm dừng / tiếp tục |
-| Chạm khi thua | Chơi lại; menu 2×2 có `CHƠI LẠI` · `AUTO WIN` / `SHORT PATH` · `MANGO` |
+| Chạm khi thua | Chơi lại; menu có `CHƠI LẠI` · `AUTOPLAY` |
 
 Cụm phím chỉnh waypoint nằm trong **dải điều khiển dưới grid** (không đè lên bàn chơi):
 `[[LIST] [▲] [✕]] / [[◀] [AUTO] [▶]] / [[FOLLOW] [▼]]` + nút `PREVIEW (n)` bên dưới,

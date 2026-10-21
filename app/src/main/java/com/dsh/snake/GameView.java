@@ -54,10 +54,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private static final int STATE_WON = 4;
 
     private static final int MODE_MANUAL = 0;
-    private static final int MODE_AUTOWIN = 1;
-    private static final int MODE_SHORTPATH = 2;
-    /** MangoSnake flavour: randomized Hamiltonian cycle every game. */
-    private static final int MODE_MANGO = 3;
+    private static final int MODE_AUTO = 1;
 
     private static final String PREFS = "snake_prefs";
     private static final String KEY_HIGH = "high_score";
@@ -197,9 +194,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     /** Auto mode the player left when taking manual control (for resume). */
     private int lastAutoMode = -1;
     private AutoPilot pilot;
-    private AutoPilot mangoPilot;
-    /** Comb (two-slab) cycle used by SHORT PATH. */
-    private AutoPilot combPilot;
+    /** Autoplay with a fresh random Hamiltonian cycle each run (RND toggle). */
+    private AutoPilot randomPilot;
+    /** RND toggle: autoplay uses the random cycle instead of the fixed snake. */
+    private boolean randomCycleOn;
 
     private final ArrayList<Particle> particles = new ArrayList<>();
     private final ArrayList<Popup> popups = new ArrayList<>();
@@ -811,11 +809,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             int want = (int) Math.floor(availH / Math.max(guessCell, 1f));
             rows = Math.max(ROWS_MIN, Math.min(ROWS_MAX, want));
             gridDecided = true;
-            // AUTOWIN keeps the classic fixed Hamiltonian cycle; MANGO gets a
-            // fresh randomized cycle (MangoSnake) on every game.
+            // AUTOPLAY walks a fixed boustrophedon cycle; RND swaps in a fresh random
+            // cycle for each run; SC / ZZ change how it chases the fruit.
             pilot = new AutoPilot(COLS, rows, false);
-            mangoPilot = new AutoPilot(COLS, rows, true);
-            combPilot = new AutoPilot(COLS, rows, false, true);
+            randomPilot = new AutoPilot(COLS, rows, false, false);
             applyAiToggles();
             if (state == STATE_READY) {
                 resetBoardState();
@@ -1043,15 +1040,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      * chasing the fruit greedily, which could never be proven to win.
      */
     private AutoPilot activePilot() {
-        if (mode == MODE_SHORTPATH) {
-            // Comb (two-slab) cycle: same safety as AUTO WIN, different shape.
-            return combPilot != null ? combPilot : pilot;
-        }
-        if (mode == MODE_AUTOWIN) {
-            return pilot;
-        }
-        if (mode == MODE_MANGO) {
-            return mangoPilot;
+        if (mode == MODE_AUTO) {
+            return randomCycleOn && randomPilot != null ? randomPilot : pilot;
         }
         return null;
     }
@@ -1087,13 +1077,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             pilot.setSmartShortcuts(smartShortcuts);
             pilot.setZigzag(zigzagOn);
         }
-        if (combPilot != null) {
-            combPilot.setSmartShortcuts(smartShortcuts);
-            combPilot.setZigzag(zigzagOn);
-        }
-        if (mangoPilot != null) {
-            mangoPilot.setSmartShortcuts(smartShortcuts);
-            mangoPilot.setZigzag(zigzagOn);
+        if (randomPilot != null) {
+            randomPilot.setSmartShortcuts(smartShortcuts);
+            randomPilot.setZigzag(zigzagOn);
         }
     }
 
@@ -1224,9 +1210,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             autoMode = newMode != MODE_MANUAL;
             lastAutoMode = autoMode ? newMode : -1;
             clearRoute();
-            if (newMode == MODE_MANGO && mangoPilot != null) {
-                // MangoSnake style: every run gets a fresh random cycle.
-                mangoPilot.reshuffleCycle();
+            if (newMode == MODE_AUTO && randomCycleOn && randomPilot != null) {
+                // RND toggle: every run gets a fresh random cycle.
+                randomPilot.reshuffleRandomMerge();
             }
             if (autoMode) {
                 resetBoardState();
@@ -1243,8 +1229,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         mode = newMode;
         autoMode = newMode != MODE_MANUAL;
         lastAutoMode = autoMode ? newMode : -1;
-        if (newMode == MODE_MANGO && mangoPilot != null) {
-            mangoPilot.reshuffleCycle();
+        if (newMode == MODE_AUTO && randomCycleOn && randomPilot != null) {
+            randomPilot.reshuffleRandomMerge();
         }
         resetBoardState();
         state = STATE_RUNNING;
@@ -2408,7 +2394,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     break;
                 }
                 foodCell = arcPick;
-                if (mode != MODE_AUTOWIN || cycle.foodReachable(cellsNow, foodCell)) {
+                if (mode != MODE_AUTO || cycle.foodReachable(cellsNow, foodCell)) {
                     return;
                 }
             }
@@ -2710,27 +2696,22 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             return;
         }
         if (rndBtn.contains(x, y)) {
-            // RND: rebuild a random Hamiltonian cycle (divide & merge) and restart.
-            AutoPilot p = activePilot();
-            if (p != null) {
-                if (mode == MODE_MANGO) {
-                    p.reshuffleCycle();
-                } else {
-                    p.reshuffleRandomMerge();
-                }
+            // RND: autoplay uses a fresh random Hamiltonian cycle each run instead of
+            // the fixed snake. Toggling it restarts the run on the new cycle.
+            randomCycleOn = !randomCycleOn;
+            if (randomCycleOn && randomPilot != null) {
+                randomPilot.reshuffleRandomMerge();
             }
-            restartGame(mode);
+            if (autoMode) {
+                restartGame(MODE_AUTO);
+            }
             haptic(false);
             return;
         }
         switch (state) {
             case STATE_READY:
                 if (autoBtn.contains(x, y)) {
-                    startGame(MODE_AUTOWIN);
-                } else if (pathBtn.contains(x, y)) {
-                    startGame(MODE_SHORTPATH);
-                } else if (mangoBtn.contains(x, y)) {
-                    startGame(MODE_MANGO);
+                    startGame(MODE_AUTO);
                 } else {
                     startGame(MODE_MANUAL);
                 }
@@ -2738,25 +2719,18 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             case STATE_DEAD:
             case STATE_WON:
                 if (autoRestartBtn.contains(x, y)) {
-                    restartGame(MODE_AUTOWIN);
-                } else if (pathRestartBtn.contains(x, y)) {
-                    restartGame(MODE_SHORTPATH);
-                } else if (mangoRestartBtn.contains(x, y)) {
-                    restartGame(MODE_MANGO);
-                } else {
+                    restartGame(MODE_AUTO);
+                } else if (restartBtn.contains(x, y)) {
                     restartGame(MODE_MANUAL);
+                } else {
+                    restartGame(autoMode ? MODE_AUTO : MODE_MANUAL);
                 }
                 return;
             case STATE_PAUSED:
-                // The mode button resumes the run: same active mode -> keep going,
-                // and if the player had taken over by hand the AI of that mode
-                // simply switches back on for the same run.
+                // AUTOPLAY switches the AI back on for the same run; anything else
+                // simply continues the run.
                 if (autoResumeBtn.contains(x, y)) {
-                    resumeMode(MODE_AUTOWIN);
-                } else if (pathResumeBtn.contains(x, y)) {
-                    resumeMode(MODE_SHORTPATH);
-                } else if (mangoResumeBtn.contains(x, y)) {
-                    resumeMode(MODE_MANGO);
+                    resumeMode(MODE_AUTO);
                 } else {
                     resumeGame();
                 }
@@ -3565,11 +3539,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void drawAutoBadge(Canvas c) {
-        String label = mode == MODE_SHORTPATH ? "SHORT PATH"
-                : mode == MODE_MANGO ? "MANGO" : "AUTO WIN";
+        String label = "AUTOPLAY";
         float bh = dp(24f);
-        float bw = mode == MODE_SHORTPATH ? dp(96f)
-                : mode == MODE_MANGO ? dp(70f) : dp(82f);
+        float bw = dp(86f);
         float bx = pauseCx - pauseR - dp(14f) - bw;
         float by = pauseCy - bh / 2f;
         autoBadge.set(bx - dp(4f), by - dp(6f), bx + bw + dp(4f), by + bh + dp(6f));
@@ -3730,29 +3702,28 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         c.drawText("SNAKE", cx, cy - dp(168f) + bob, readyTitlePaint);
         readyTitlePaint.clearShadowLayer();
 
-        c.drawText("Chọn chế độ để bắt đầu", cx, cy - dp(120f), readySubPaint);
+        c.drawText("Chạm để bắt đầu", cx, cy - dp(120f), readySubPaint);
 
-        // Four modes, one per row: CHƠI · AUTO WIN · SHORT PATH · MANGO.
-        float gap = dp(10f);
-        float bh = Math.min(dp(52f), Math.max(dp(34f), (boardH * 0.54f - gap * 3f) / 4f));
+        // Two ways to play: CHƠI (manual waypoints) and AUTOPLAY (the cycle AI, whose
+        // variant is picked by the SC / ZZ / RND toggles above the speed buttons).
+        float gap = dp(12f);
+        float bh = Math.min(dp(56f), Math.max(dp(38f), (boardH * 0.30f - gap) / 2f));
         float bw = Math.min(boardW * 0.86f, dp(300f));
         float bx = cx - bw / 2f;
         float top = cy - dp(96f);
         startBtn.set(bx, top, bx + bw, top + bh);
-        autoBtn.set(bx, top + (bh + gap), bx + bw, top + 2f * bh + gap);
-        pathBtn.set(bx, top + 2f * (bh + gap), bx + bw, top + 3f * bh + 2f * gap);
-        mangoBtn.set(bx, top + 3f * (bh + gap), bx + bw, top + 4f * bh + 3f * gap);
+        autoBtn.set(bx, top + bh + gap, bx + bw, top + 2f * bh + gap);
+        pathBtn.setEmpty();
+        mangoBtn.setEmpty();
 
         drawPrimaryButton(c, startBtn, "CHƠI", false);
-        drawSecondaryButton(c, autoBtn, "AUTO WIN", false);
-        drawSecondaryButton(c, pathBtn, "SHORT PATH", false);
-        drawSecondaryButton(c, mangoBtn, "MANGO", false);
+        drawSecondaryButton(c, autoBtn, "AUTOPLAY", false);
 
-        float hintY = top + 4f * (bh + gap) + dp(20f);
+        float hintY = top + 2f * bh + gap + dp(24f);
         c.drawText("CHƠI: chạm board đặt waypoint rồi bấm MOVE", cx, hintY, readyHintPaint);
-        c.drawText("AUTO WIN: luôn thắng · MANGO: chu trình ngẫu nhiên", cx,
+        c.drawText("AUTOPLAY: AI đi chu trình Hamilton — thắng 100%", cx,
                 hintY + dp(22f), readyHintPaint);
-        c.drawText("SHORT PATH: BFS ngắn nhất · cắn thân = cắt đuôi", cx,
+        c.drawText("SC: shortcut an toàn · ZZ: zig-zag · RND: chu trình ngẫu nhiên", cx,
                 hintY + dp(44f), readyHintPaint);
     }
 
@@ -3762,28 +3733,22 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         c.drawText("TẠM DỪNG", cx, cy - dp(110f), pausedTitlePaint);
 
-        // 2 x 2: TIẾP TỤC · AUTO WIN / SHORT PATH · MANGO
+        // Two choices only: continue the run, or switch the AUTOPLAY AI back on.
         float gap = dp(10f);
         float bw = Math.min((boardW * 0.88f - gap) / 2f, dp(170f));
         float bh = dp(50f);
         float bx = cx - (bw * 2f + gap) / 2f;
-        float by = cy - dp(70f);
+        float by = cy - dp(60f);
         resumeBtn.set(bx, by, bx + bw, by + bh);
         autoResumeBtn.set(bx + bw + gap, by, bx + 2f * bw + gap, by + bh);
-        pathResumeBtn.set(bx, by + bh + gap, bx + bw, by + 2f * bh + gap);
-        mangoResumeBtn.set(bx + bw + gap, by + bh + gap, bx + 2f * bw + gap,
-                by + 2f * bh + gap);
+        pathResumeBtn.setEmpty();
+        mangoResumeBtn.setEmpty();
 
         drawPrimaryButton(c, resumeBtn, "TIẾP TỤC", false);
-        drawSecondaryButton(c, autoResumeBtn, "AUTO WIN", false);
-        drawSecondaryButton(c, pathResumeBtn, "SHORT PATH", false);
-        drawSecondaryButton(c, mangoResumeBtn, "MANGO", false);
+        drawSecondaryButton(c, autoResumeBtn, "AUTOPLAY", false);
 
-        String now = mode == MODE_AUTOWIN ? "AUTO WIN"
-                : mode == MODE_SHORTPATH ? "SHORT PATH"
-                : mode == MODE_MANGO ? "MANGO" : "THỦ CÔNG";
-        c.drawText("Đang ở chế độ " + now, cx, by + 2f * bh + gap + dp(38f),
-                readyHintPaint);
+        String now = mode == MODE_AUTO ? "AUTOPLAY" : "CHƠI";
+        c.drawText("Đang ở chế độ " + now, cx, by + bh + dp(34f), readyHintPaint);
     }
 
     private void drawDeadOverlay(Canvas c, boolean won) {
@@ -3817,24 +3782,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     readyHintPaint);
         }
 
-        // 2 x 2 restart grid: CHƠI LẠI · AUTO WIN / SHORT PATH · MANGO
-        float gap = dp(6f);
-        float bw = (cw * 0.88f - gap) / 2f;
-        float bh = Math.min(dp(46f), ch * 0.16f);
-        float by = top + ch * 0.62f;
+        // Two choices: CHƠI LẠI (manual) or AUTOPLAY (cycle AI).
+        float gap = dp(8f);
+        float bw = (cw * 0.86f - gap) / 2f;
+        float bh = Math.min(dp(48f), ch * 0.17f);
+        float by = top + ch * 0.64f;
         float left = cx - (bw * 2f + gap) / 2f;
         restartBtn.set(left, by, left + bw, by + bh);
         autoRestartBtn.set(left + bw + gap, by, left + 2f * bw + gap, by + bh);
-        pathRestartBtn.set(left, by + bh + gap, left + bw, by + 2f * bh + gap);
-        mangoRestartBtn.set(left + bw + gap, by + bh + gap, left + 2f * bw + gap,
-                by + 2f * bh + gap);
+        pathRestartBtn.setEmpty();
+        mangoRestartBtn.setEmpty();
 
         drawPrimaryButton(c, restartBtn, "CHƠI LẠI", false);
-        drawSecondaryButton(c, autoRestartBtn, "AUTO WIN", false);
-        drawSecondaryButton(c, pathRestartBtn, "SHORT PATH", false);
-        drawSecondaryButton(c, mangoRestartBtn, "MANGO", false);
+        drawSecondaryButton(c, autoRestartBtn, "AUTOPLAY", false);
 
-        c.drawText("hoặc chạm ra ngoài để chơi lại", cx, by + 2f * bh + gap + dp(24f),
+        c.drawText("hoặc chạm ra ngoài để chơi lại", cx, by + bh + dp(22f),
                 readyHintPaint);
 
         c.restore();
