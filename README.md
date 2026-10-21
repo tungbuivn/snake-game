@@ -165,15 +165,22 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
   `pollLast()` ở tick đó, nên ô đuôi **không đổi**: log `EAT head=.. prevHead=.. tail=..
   tailBefore=..` cho thấy `tail == tailBefore` ở mọi tick ăn) — nhờ vậy dữ liệu bám đuôi
   của AI vẫn đúng.
-  **Cách vẽ đầu (chốt)**: đầu luôn nội suy **từ ô nó vừa rời → đúng ô thật của nó**
-  (`prevCells[0] → body[0]`). Vì thế đầu **dính liền thân ở mọi lúc, kể cả khi rẽ** —
-  không bao giờ “văng” lên trước 1 ô, không bao giờ trôi qua ô quả rồi thụt lại. Đuôi
-  thụt vào trong cùng tick (tick ăn thì đuôi đứng yên) nên **độ dài hình vẽ = độ dài
-  thân thật**. Vị trí vẽ lấy từ `tickAccum / interval()` nên **không phụ thuộc fps**.
-  Để quả không “biến mất trước mặt”: quả vừa ăn **vẫn vẽ, mờ dần đúng trong tick đó**
-  (`eatenCell`, alpha `1-t`, to ra 0.25×) và quả mới **hiện dần** (`foodFresh`, alpha
-  `1.5t`) — nên quả cũ tắt **đúng lúc đầu đặt vào ô của nó**, không nhảy giật.
-  Đuôi bo tròn đúng bằng bề rộng thân.
+  **Cách vẽ đầu (chốt)**: cuối mỗi tick app **tính trước nước đi kế tiếp** (`predictNext()`,
+  đã áp cả "safety net"), rồi vẽ **đầu trượt từ ô thật của nó vào ô kế tiếp** (`curCells[0]
+  → ô kế`) trong khi **thân theo sau**: ô mà đầu vừa rời trở thành đốt cổ (`curCells[0]`
+  vẫn được vẽ), và **đuôi thụt vào trong cùng tick** (tick sắp ăn quả thì đuôi đứng yên).
+  Nhờ vậy:
+  - t = 0: hình vẽ = **đúng thân thật** (đầu đúng ô, đuôi đúng ô);
+  - t → 1: đầu đã **vào hẳn ô kế**, đuôi đã thụt 1 ô ⇒ **độ dài hình vẽ không đổi**, và
+    t = 1 trùng khít với thân của tick sau nên **không bao giờ giật**;
+  - quả: đầu **vào đúng ô quả ở cuối tick**, mà quả chỉ bị ăn ở đúng ranh giới đó ⇒ quả
+    biến mất **đúng lúc đầu đặt vào ô**, không “trôi qua rồi thụt lại”;
+  - nước đi dự phóng **chính là nước đi tick sau dùng** (không `decide()` lần hai) nên
+    hình và logic **không thể lệch** — đã đo: **0 lần lệch** trong 25 s chạy liên tục;
+  - chơi tay: dự phóng là "đi thẳng"; khi bạn bấm đổi hướng thì dự phóng bị bỏ nên đầu
+    không bao giờ vẽ sai hướng.
+  Vị trí vẽ lấy từ `tickAccum / interval()` nên **không phụ thuộc fps**. Quả mới **hiện
+  dần** (`foodFresh`, alpha `1.5t`). Đuôi bo tròn đúng bằng bề rộng thân.
 - **Game loop 60 fps**: render thread tự nhịp theo **lịch tuyệt đối 16.67 ms/frame**
   (`FRAME_NS`) — không phải kiểu "vẽ xong rồi `Thread.sleep(15)`" (cách đó cho chu kỳ
   25–35 ms nên hình bị giật). Khi bị trễ hơn 4 frame thì **resync** thay vì cố đuổi.
