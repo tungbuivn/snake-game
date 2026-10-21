@@ -92,9 +92,11 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
 - Mồi táo có quầng sáng, nhấp nháy; hạt hiệu ứng khi ăn; điểm `+10` bay lên.
 - Điểm số + kỷ lục lưu `SharedPreferences`, tạm dừng/tiếp tục, overlay kết thúc,
   rung nhẹ (haptic) khi ăn/thua.
-- Board tự co giãn theo màn hình: 20 cột, số hàng 12..46 — hàng tự tăng để lấp kín
-  vùng chơi (máy 1440×3200 ra 20×41, ô 68px), HUD nằm sát mép trên hai bên camera
-  cutout, badge `AUTO` + nút tạm dừng ở thanh dưới. Fullscreen immersive.
+- Board tự co giãn theo màn hình: 20 cột, số hàng 12..46. **Dải điều khiển luôn được
+  chừa riêng ở dưới grid** (cụm phím waypoint + PREVIEW + `MOVE` + tạm dừng) nên bàn
+  phím **không bao giờ đè lên ô chơi**; nhờ vậy máy 1440×3200 ra **20×34** (ô 68px) thay
+  vì 20×40 trước đây — grid gọn hơn, chọn điểm dễ hơn. HUD nằm sát mép trên hai bên
+  camera cutout. Fullscreen immersive.
 
 ## Cấu trúc
 
@@ -156,14 +158,9 @@ muốn phát hành chính thức trên Play Store thì thay keystore riêng).
 | Chạm `❚❚` (góc dưới phải) | Tạm dừng / tiếp tục |
 | Chạm khi thua | Chơi lại; menu 2×2 có `CHƠI LẠI` · `AUTO WIN` / `SHORT PATH` · `MANGO` |
 
-Cụm phím chỉnh waypoint (nằm góc dưới-trái board):
-
-```
-[LIST]  [ ▲ ]  [ ✕ ]
-[ ◀  ]  [AUTO] [ ▶ ]
-        [ ▼ ]
-   [ PREVIEW (n) ]     ← phát lại route hiện tại (các waypoint đang có)
-```
+Cụm phím chỉnh waypoint nằm trong **dải điều khiển dưới grid** (không đè lên bàn chơi):
+`[[LIST] [▲] [✕]] / [[◀] [AUTO] [▶]] / [[▼]]` + nút `PREVIEW (n)` bên dưới, còn `MOVE`
+và nút tạm dừng ở bên phải dải này; dòng gợi ý + `Chết: N` ở trên cùng của dải.
 
 HUD hiện `ĐIỂM`, `KỶ LỤC`, badge tên chế độ AI, và thanh dưới có `Chết: N` — mỗi lần
 **cắn vào thân** (bị cắt đuôi) hay **đâm tường** đều +1 và đổi màu rắn.

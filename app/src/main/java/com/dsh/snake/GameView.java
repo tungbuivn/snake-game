@@ -148,6 +148,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private float hudTop;
     private float hudH;
     private float bottomH;
+    private float hintTop;
 
     private final ArrayDeque<Integer> body = new ArrayDeque<>();
     private final ArrayDeque<int[]> dirQueue = new ArrayDeque<>();
@@ -523,13 +524,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         wpTextPaint.setTextAlign(Paint.Align.CENTER);
 
         padBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        padBgPaint.setColor(0x3D0A1322);
+        padBgPaint.setColor(0xF0081120);
         padBtnPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        padBtnPaint.setColor(0x66223355);
+        padBtnPaint.setColor(0xFF1B2A44);
         padBtnStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         padBtnStrokePaint.setStyle(Paint.Style.STROKE);
         padBtnStrokePaint.setStrokeWidth(dp(1f));
-        padBtnStrokePaint.setColor(0x66B9FFD8);
+        padBtnStrokePaint.setColor(0x8035D07F);
         padIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         padIconPaint.setColor(0xE6C8FFDD);
         padIconPaint.setStyle(Paint.Style.FILL);
@@ -707,7 +708,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             return;
         }
         float margin = dp(13f);
-        bottomH = dp(56f);
+        // Dedicated control strip under the grid: waypoint pad + PREVIEW row and
+        // the MOVE / pause buttons. Reserving it always keeps the grid size
+        // stable when the player switches modes.
+        float pb = dp(40f);
+        float pg = dp(6f);
+        float padW = pb * 3f + pg * 2f;
+        float padH = pb * 3f + pg * 2f;
+        bottomH = dp(18f) + padH + dp(8f) + dp(32f) + dp(8f);
         float cut = safeTop();
         float pillsH = dp(52f);
         // HUD pills live in the top strip (left/right of the camera cutout) and
@@ -753,28 +761,26 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         hudTop = topPad;
 
-        pauseR = dp(24f);
+        // --- control strip (outside the grid) -----------------------------
+        float ctrlTop = boardRect.bottom + dp(6f);
+        float replayH = dp(32f);
+        float padL = boardLeft;
+        float padT = ctrlTop + dp(16f);
+        padPanel.set(padL - dp(4f), ctrlTop - dp(2f), boardRect.right + dp(4f),
+                h - dp(2f));
+        hintTop = ctrlTop + dp(11f);
+
+        pauseR = dp(22f);
         pauseCx = boardRect.right - pauseR;
-        pauseCy = Math.min(boardRect.bottom + bottomH * 0.55f, h - dp(12f) - pauseR);
+        pauseCy = padT + padH / 2f;
         pauseBtn.set(pauseCx - pauseR * 1.7f, pauseCy - pauseR * 1.7f,
                 pauseCx + pauseR * 1.7f, pauseCy + pauseR * 1.7f);
 
-        // MOVE / STOP pill left of the pause button (manual mode only).
-        float mw = dp(104f);
-        float mh = dp(38f);
-        float mRight = pauseCx - pauseR - dp(16f);
+        // MOVE / STOP pill, vertically centred in the strip (manual mode only).
+        float mw = dp(112f);
+        float mh = dp(40f);
+        float mRight = pauseCx - pauseR - dp(14f);
         moveBtn.set(mRight - mw, pauseCy - mh / 2f, mRight, pauseCy + mh / 2f);
-
-        // Arrow pad for editing the selected waypoint (bottom-left of the board).
-        float pb = dp(44f);
-        float pg = dp(6f);
-        float padW = pb * 3f + pg * 2f;
-        float padH = pb * 3f + pg * 2f;
-        float replayH = dp(34f);
-        float padL = boardLeft + dp(14f);
-        float padT = boardRect.bottom - dp(14f) - replayH - dp(8f) - padH;
-        padPanel.set(padL - dp(9f), padT - dp(9f), padL + padW + dp(9f),
-                padT + padH + dp(8f) + replayH + dp(9f));
         padUpBtn.set(padL + pb + pg, padT, padL + pb * 2f + pg, padT + pb);
         padLeftBtn.set(padL, padT + pb + pg, padL + pb, padT + pb * 2f + pg);
         padRightBtn.set(padL + pb * 2f + pg * 2f, padT + pb + pg,
@@ -787,7 +793,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         padAutoBtn.set(padL + pb + pg, padT + pb + pg,
                 padL + pb * 2f + pg, padT + pb * 2f + pg);
         padListBtn.set(padL, padT, padL + pb, padT + pb);
-        // REPLAY is a wide button under the pad: walks the waypoint history again.
+        // PREVIEW sits under the pad, still inside the control strip.
         float replayTop = padT + padH + dp(8f);
         padReplayBtn.set(padL, replayTop, padL + padW, replayTop + replayH);
 
@@ -2568,17 +2574,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     /** Arrow pad (+ delete) shown while a waypoint is selected. */
     private void drawWaypointPad(Canvas c) {
-        if (selectedWp < 0 || selectedWp >= waypoints.size()) {
-            return;
+        // The strip background is painted by drawBottomBar (before the hint,
+        // MOVE and pause button) so those stay on top of it.
+        if (selectedWp >= 0 && selectedWp < waypoints.size()) {
+            drawPadButton(c, padUpBtn, 0);
+            drawPadButton(c, padDownBtn, 1);
+            drawPadButton(c, padLeftBtn, 2);
+            drawPadButton(c, padRightBtn, 3);
+            drawPadButton(c, padDelBtn, 4);
+            drawPadButton(c, padListBtn, 5);
+            drawPadButton(c, padAutoBtn, 6);
         }
-        c.drawRoundRect(padPanel, dp(18f), dp(18f), padBgPaint);
-        drawPadButton(c, padUpBtn, 0);
-        drawPadButton(c, padDownBtn, 1);
-        drawPadButton(c, padLeftBtn, 2);
-        drawPadButton(c, padRightBtn, 3);
-        drawPadButton(c, padDelBtn, 4);
-        drawPadButton(c, padListBtn, 5);
-        drawPadButton(c, padAutoBtn, 6);
         // REPLAY pill under the pad
         boolean has = !waypoints.isEmpty();
         c.drawRoundRect(padReplayBtn, dp(10f), dp(10f),
@@ -2957,6 +2963,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void drawBottomBar(Canvas c) {
+        if (!autoMode && mode == MODE_MANUAL) {
+            // Control strip background first, so hint / MOVE / pause sit on top.
+            c.drawRoundRect(padPanel, dp(16f), dp(16f), padBgPaint);
+        }
         String hint;
         String broken = "";
         if (autoMode) {
@@ -2978,7 +2988,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         hint += "  •  Chết: " + deaths;
         hintPaint.setColor(broken.length() > 0 ? 0xFFFF8FA3 : 0xFF647699);
-        c.drawText(hint, boardLeft + dp(2f), pauseCy + dp(4.5f), hintPaint);
+        c.drawText(hint, boardLeft + dp(2f), hintTop, hintPaint);
         hintPaint.setColor(0xFF647699);
         if (!autoMode && mode == MODE_MANUAL) {
             drawMoveButton(c);
