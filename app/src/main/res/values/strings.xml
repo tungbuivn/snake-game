@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Snake 2D</string>
+    <color name="bg">#05070F</color>
+    <color name="ic_launcher_bg">#0B1424</color>
+</resources>

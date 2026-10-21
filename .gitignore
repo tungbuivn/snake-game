@@ -1,0 +1,24 @@
+# build output
+/build/
+*.apk
+*.idsig
+
+# local Android SDK (installed by build.ps1 into the repo folder)
+/.android-sdk/
+
+# signing material (debug keystore is generated locally)
+/keystore/
+
+# screenshots / adb dumps used while developing
+/shots/
+
+# SDK repository dump downloaded for the offline build
+/tools/repo.xml
+
+# editor / OS noise
+/.idea/
+/.vscode/
+*.iml
+Thumbs.db
+desktop.ini
+.DS_Store
