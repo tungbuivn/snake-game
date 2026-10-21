@@ -183,6 +183,10 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
   - **khi dừng** (đang đặt waypoint / xem lại route) thì `planPaused`: `hasNext = false`
     và `interpolation() = 1` ⇒ đầu đứng **đúng ô thật**, đuôi đứng **đúng ô đuôi**, hình
     **dứt điểm** (trước đây đứng nửa đường nên trông như đầu/đuôi **thụt lại 1 ô**).
+  **Đầu quay mượt**: `headAngleDeg` **tiến dần** về hướng đi (`atan2(dirY, dirX)`, chọn
+  đường ngắn nhất nên không bị nhảy 180°) với tốc độ ~23%/khung ở 60 fps ⇒ quay 90° mất
+  **~0,3 s** thay vì **giật 1 phát 90°** như trước (dump có `ang=`/`dir=` để kiểm tra: bắt
+  được cảnh đang quay, ví dụ `dir=0,-1` mà `ang=-43` rồi mới −90).
   Vị trí vẽ lấy từ `tickAccum / interval()` nên **không phụ thuộc fps**. Quả mới **hiện
   dần** (`foodFresh`, alpha `1.5t`). Đuôi bo tròn đúng bằng bề rộng thân.
 - **Game loop 60 fps**: render thread tự nhịp theo **lịch tuyệt đối 16.67 ms/frame**

@@ -188,6 +188,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int[] curCells = new int[0];
     /** Manual planning pause / replay: no step is coming, so the drawing is settled. */
     private boolean planPaused;
+    /** Head rotation in degrees, eased towards the travel direction (no 90 deg snap). */
+    private float headAngleDeg;
     /** Predicted next step (unit direction) so the head can be drawn leading into it. */
     private int nextDx;
     private int nextDy;
@@ -1234,6 +1236,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         curCells = cellsToArray();
         stallTicks = 0;
         hasNext = false;
+        headAngleDeg = (float) Math.toDegrees(Math.atan2(dirY, dirX));
         score = 0;
         tickAccum = 0f;
         animTime = 0f;
@@ -1384,6 +1387,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void update(float dt) {
         animTime += dt;
+        // Turn the head smoothly: the capsule rotates towards the travel direction
+        // instead of snapping 90 degrees on the frame the direction changes.
+        float targetDeg = (float) Math.toDegrees(Math.atan2(dirY, dirX));
+        float delta = targetDeg - headAngleDeg;
+        while (delta > 180f) {
+            delta -= 360f;
+        }
+        while (delta < -180f) {
+            delta += 360f;
+        }
+        headAngleDeg += delta * Math.min(1f, dt * 14f);
+        if (Math.abs(delta) < 0.4f) {
+            headAngleDeg = targetDeg;
+        }
         updateSpeed(dt);
         dumpState();
 
@@ -2837,6 +2854,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + " zz=" + (zigzagOn ? 1 : 0)
                     + " bfs=" + (bfsOn ? 1 : 0)
                     + " tail=" + (tailChaseOn ? 1 : 0)
+                    + " ang=" + Math.round(headAngleDeg)
+                    + " dir=" + dirX + "," + dirY
                     + " tailB=" + Math.round(tailBtn.centerX()) + ","
                     + Math.round(tailBtn.centerY())
                     + " bfsB=" + Math.round(bfsBtn.centerX()) + ","
@@ -3790,7 +3809,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         float hl = cell * 0.50f;       // half length (capsule)
         float er = w * 0.13f;
 
-        float angle = (float) Math.toDegrees(Math.atan2(dirY, dirX));
+        float angle = headAngleDeg;
         c.save();
         // Centred exactly on the head cell (no forward shift, no tongue).
         c.translate(hx, hy);
