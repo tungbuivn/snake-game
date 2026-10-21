@@ -26,7 +26,8 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      luôn thấy được **đầu và đuôi** sẽ ở đâu để đặt waypoint tiếp theo.
      Waypoint **được phép nằm trên thân rắn hiện tại** (khi rắn bò tới thì đuôi đã đi
      qua, ô đó thường đã trống).
-  2. `AUTO WIN` — chu trình Hamilton **cố định** (2 dải ghép 2-opt), luôn thắng, 0 chết.
+  2. `AUTO WIN` — **một** chu trình Hamilton **cố định** phủ toàn board (boustrophedon),
+     luôn thắng, 0 chết.
   3. `SHORT PATH` — chỉ BFS đường ngắn nhất tới quả (ngocbh style: virtual-eat + kiểm
      tra đuôi + bám đuôi khi bí); quả sinh **random**; đâm vào thân thì **cắt đuôi**
      (xem mục “cắn thân”) và chạy tiếp; hết ô trống cũng tính là thắng.
@@ -39,27 +40,19 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
 - **Cắn thân = một lần chết nhưng không dừng ván**: khi đầu đâm vào thân (mọi chế độ),
   đoạn thân từ chỗ đâm tới đuôi bị cắt bỏ, bộ đếm **`Chết` tăng 1**, rắn **đổi màu**
   (6 màu luân phiên) và **chạy tiếp**; chỉ đâm tường mới kết thúc ván.
-- **AI (AutoPilot)**: hai cách chạy, cùng một bộ máy an toàn.
-  - **`AUTO WIN` — tìm đường trong “vùng grid”** (bản tối ưu mới): thân rắn là tường,
-    các ô còn lại tạo thành **vùng chơi**; lấy **min/max cột & hàng** của vùng đó, mở
-    rộng thêm vị trí quả và đầu rắn, rồi **BFS trong đúng vùng min/max mới** để tới quả
-    và đi bước đầu của đường ngắn nhất. Mỗi nước còn được kiểm tra **“đuôi còn tới
-    được không”** + **vùng trống còn đủ chỗ cho cả thân** (BFS từ đầu mới tới đuôi), nên
-    rắn không tự khoá mình; nếu không nước nào an toàn thì quay về bước trên **chu trình
-    Hamilton**.
-    **Chống lặp vô tận**: mỗi lần đầu rắn quay lại ô đã đi qua (kể từ quả trước), vùng
-    min/max được **nới thêm 1 ô mỗi phía**, tăng dần tới khi phủ **toàn board**
-    (`LOOP_MARGIN_MAX`); đồng thời ô vừa đi qua bị **cộng điểm phạt** nên rắn phá vòng
-    lặp mà đi đường khác. Ăn quả xong thì bộ đếm lặp reset về 0.
-  - **`MANGO` — chu trình Hamilton ngẫu nhiên**: chuỗi boustrophedon bị “xáo” bằng 250
-    lượt split + mend (2-opt) → mỗi ván một chu trình mê cung mới; đi theo luật “tiến
-    trên chu trình trong cung trống” (an toàn *do cấu trúc*).
-  - Chu trình Hamilton dùng chung 2 kiểu dựng: **(A)** một chu trình boustrophedon phủ
-    toàn board; **(B)** hai dải ghép 2-opt — `AUTO WIN` dùng B cố định.
+- **AI (AutoPilot)**: hai cách chạy, cùng một bộ máy an toàn (chỉ đi **tiến** trên chu
+  trình, trong **cung trống** giữa đầu và đuôi; quả sinh trong cung nên luôn tới được).
+  - **`AUTO WIN` — chu trình Hamilton đơn, cố định**: một chu trình boustrophedon phủ
+    toàn board; mỗi ván đường đi y hệt nhau. Shortcut BFS trong cung để đi nhanh hơn,
+    nước nào **vượt quá quả trên chu trình** thì bị loại (vượt là mất nguyên một vòng) —
+    nhờ vậy đầu luôn tiến đều tới quả và ván **không bao giờ thua**.
+  - **`MANGO` — chu trình Hamilton ngẫu nhiên**: cũng một chu trình đơn, nhưng chuỗi
+    boustrophedon bị “xáo” bằng 250 lượt split + mend (2-opt) nên **mỗi ván một đường
+    mê cung mới**; luật đi an toàn y như `AUTO WIN`.
   - Quả chỉ sinh ở ô trống **và còn tới được** (kiểm tra BFS lúc sinh, không sinh lại
-    liên tục) nên quả không nhấp nháy mà cũng không bao giờ bị kẹt sau thân rắn.
-  Đo trên máy: **AUTO WIN** (vùng grid + chống lặp) 86s: 130 quả, avg 0.67s, max 2.7s,
-  100% ≤3s, **0 chết** · **MANGO** 60s: 62 quả, avg 0.93s, 100% ≤3s, 0 chết; chạy dài
+    liên tục) nên quả không nhấp nháy mà cũng không bị kẹt sau thân rắn.
+  Đo trên máy: **AUTO WIN** 58s: 70 quả, avg 0.85s, 20 lượt cuối avg 0.51s, max 2.8s,
+  **100% ≤3s, 0 chết** · **MANGO** 60s: 62 quả, avg 0.93s, 100% ≤3s, 0 chết; chạy dài
   MANGO thắng **798/800 đốt** sau ~480s, 0 chết.
   *Bước tiến đảm bảo* (nhánh chu trình): nước đi **vượt qua quả trên chu trình** bị
   loại (vượt là mất thêm nguyên một vòng); chỉ khi mọi nước đều vượt mới chọn bước

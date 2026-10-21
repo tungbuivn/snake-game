@@ -1009,9 +1009,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     /** Adaptive speed: keep the time to the next fruit at or below 3 seconds. */
     private void onFruitEaten() {
         long now = android.os.SystemClock.uptimeMillis();
-        if (mode == MODE_AUTOWIN && pilot != null) {
-            pilot.resetLoopGuard();
-        }
         if (autoMode && lastEatMs > 0L) {
             long took = now - lastEatMs;
             if (took > 2500L) {
@@ -1243,14 +1240,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             AutoPilot cycle = activePilot();
             if (mode == MODE_SHORTPATH && pathPilot != null) {
                 d = pathPilot.decide(cellsToArray(), foodCell, dirX, dirY);
-            } else if (mode == MODE_AUTOWIN && cycle != null) {
-                int[] cellsNow = cellsToArray();
-                d = cycle.decideRegion(cellsNow, foodCell, dirX, dirY);
-                if (!cycle.lastFoodReachable()) {
-                    // The body sealed the fruit off: pick a reachable one once.
-                    spawnFood();
-                }
             } else if (cycle != null) {
+                // Both cycle modes use the classic Hamiltonian walk: forward only,
+                // inside the free arc between the head and the tail.
                 d = cycle.decide(cellsToArray(), foodCell, dirX, dirY);
             }
             if (d != null) {

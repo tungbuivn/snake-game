@@ -33,7 +33,7 @@ final class AutoPilot {
     private static final int RANDOM_ITERATIONS = 250;
 
     /** Two strip cycles joined at the seam (variant B); false = one cycle (A). */
-    private static final boolean TWO_STRIPS = true;
+    private static final boolean TWO_STRIPS = false;
 
     /* Generator-space directions (MangoSnake Cycle.java bit values). */
     private static final int G_UP = 8;
@@ -46,9 +46,6 @@ final class AutoPilot {
 
     private static final int[][] DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 
-    /** Maximum extra margin added around the region box (full board). */
-    private static final int LOOP_MARGIN_MAX = 24;
-
     private final int cols;
     private final int rows;
     private final int total;
@@ -58,13 +55,6 @@ final class AutoPilot {
     private final int[] dist;
     private final boolean[] blocked;
     private final int[] queue;
-    private final boolean[] occ2;
-    private final boolean[] seen;
-    /** Visits since the last fruit; used to detect (and break) position loops. */
-    private final int[] visitCount;
-    /** Extra cells added around the region box when a loop is detected. */
-    private int regionMargin;
-    private boolean regionFoodReachable = true;
     private int stepsToFood = -1;
 
     AutoPilot(int cols, int rows) {
@@ -81,9 +71,6 @@ final class AutoPilot {
         dist = new int[total];
         blocked = new boolean[total];
         queue = new int[total];
-        occ2 = new boolean[total];
-        seen = new boolean[total];
-        visitCount = new int[total];
         buildCycle();
     }
 
@@ -489,219 +476,6 @@ final class AutoPilot {
     /* Decision                                                           */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Region pathfinding (the AUTO WIN brain).
-     *
-     * <p>The body is a wall; the cells that are left over form the playable
-     * region. Take its bounding box (min/max column and row), widen it with the
-     * fruit and the head, then run a BFS <em>inside that box</em> to the fruit and
-     * take the first step of that shortest path. A candidate is only used when
-     * the tail is still reachable after the move (otherwise the snake could seal
-     * itself in), and when nothing qualifies the Hamiltonian cycle step is the
-     * fallback - so the run still cannot be lost.
-     */
-    int[] decideRegion(int[] body, int food, int dirX, int dirY) {
-        if (body.length == 0) {
-            return null;
-        }
-        int head = body[0];
-        int tail = body[body.length - 1];
-        markBody(body);
-
-        // Bounding box of the free region (the fruit is free, so it is inside).
-        int minX = cols;
-        int maxX = -1;
-        int minY = rows;
-        int maxY = -1;
-        for (int c = 0; c < total; c++) {
-            if (blocked[c]) {
-                continue;
-            }
-            int x = c % cols;
-            int y = c / cols;
-            if (x < minX) {
-                minX = x;
-            }
-            if (x > maxX) {
-                maxX = x;
-            }
-            if (y < minY) {
-                minY = y;
-            }
-            if (y > maxY) {
-                maxY = y;
-            }
-        }
-        int hx = head % cols;
-        int hy = head / cols;
-        minX = Math.min(minX, hx);
-        maxX = Math.max(maxX, hx);
-        minY = Math.min(minY, hy);
-        maxY = Math.max(maxY, hy);
-        // Loop guard: every time the head comes back to a cell it already visited
-        // since the last fruit the search window grows (up to the whole board), so
-        // a repeated position cannot trap the snake in an endless cycle.
-        visitCount[head]++;
-        if (visitCount[head] > 1 && regionMargin < LOOP_MARGIN_MAX) {
-            regionMargin++;
-        }
-        minX = Math.max(0, minX - regionMargin);
-        maxX = Math.min(cols - 1, maxX + regionMargin);
-        minY = Math.max(0, minY - regionMargin);
-        maxY = Math.min(rows - 1, maxY + regionMargin);
-        if (maxX < minX || maxY < minY) {
-            return decide(body, food, dirX, dirY);
-        }
-
-        computeBoxedFoodDistance(food, minX, maxX, minY, maxY);
-        updateStepsToFood(head, food);
-        regionFoodReachable = false;
-        if (food >= 0) {
-            // The head itself is a body cell, so check its free neighbours.
-            for (int k = 0; k < 4; k++) {
-                int nx0 = hx + DIRS[k][0];
-                int ny0 = hy + DIRS[k][1];
-                if (nx0 < 0 || nx0 >= cols || ny0 < 0 || ny0 >= rows) {
-                    continue;
-                }
-                if (dist[ny0 * cols + nx0] >= 0) {
-                    regionFoodReachable = true;
-                    break;
-                }
-            }
-            if (regionFoodReachable && dist[head] >= 0) {
-                stepsToFood = Math.max(stepsToFood, dist[head]);
-            }
-        }
-
-        int[] cell = new int[4];
-        int[] score = new int[4];
-        int n = 0;
-        for (int k = 0; k < 4; k++) {
-            int nx = hx + DIRS[k][0];
-            int ny = hy + DIRS[k][1];
-            if (nx < minX || nx > maxX || ny < minY || ny > maxY) {
-                continue;
-            }
-            int c = ny * cols + nx;
-            // The tail cell only frees up when the snake does not eat; if the
-            // fruit sits on it the tail stays, so stepping there would bite.
-            boolean tailFree = c == tail && c != food;
-            if (blocked[c] && !tailFree) {
-                continue;
-            }
-            int d = dist[c];
-            boolean onCycle = c == cycleCell[(cycleIdx[head] + 1) % total];
-            // Recently visited cells are penalised so the snake breaks a loop
-            // instead of walking the same ring again and again.
-            score[n] = (d < 0 ? 1_000_000 : d * 4) + visitCount[c] * 6
-                    + (onCycle ? 0 : 1);
-            cell[n] = c;
-            n++;
-        }
-        // Try the closest moves first and keep the first one that stays safe
-        // (tail still reachable and enough open room for the whole body).
-        for (int i = 0; i < n; i++) {
-            int pick = -1;
-            for (int j = 0; j < n; j++) {
-                if (score[j] < 0) {
-                    continue;
-                }
-                if (pick < 0 || score[j] < score[pick]) {
-                    pick = j;
-                }
-            }
-            if (pick < 0) {
-                break;
-            }
-            score[pick] = -1;
-            int c = cell[pick];
-            if (tailReachableAfter(body, c, c == food)) {
-                return dirTo(head, c);
-            }
-        }
-        return decide(body, food, dirX, dirY);
-    }
-
-    /** BFS distance to the fruit, limited to the given box (and the body walls). */
-    private void computeBoxedFoodDistance(int food, int minX, int maxX, int minY, int maxY) {
-        Arrays.fill(dist, -1);
-        if (food < 0) {
-            return;
-        }
-        int qh = 0;
-        int qt = 0;
-        queue[qt++] = food;
-        dist[food] = 0;
-        while (qh < qt) {
-            int cur = queue[qh++];
-            int cx = cur % cols;
-            int cy = cur / cols;
-            for (int k = 0; k < 4; k++) {
-                int nx = cx + DIRS[k][0];
-                int ny = cy + DIRS[k][1];
-                if (nx < minX || nx > maxX || ny < minY || ny > maxY) {
-                    continue;
-                }
-                int n = ny * cols + nx;
-                if (dist[n] >= 0 || blocked[n]) {
-                    continue;
-                }
-                dist[n] = dist[cur] + 1;
-                queue[qt++] = n;
-            }
-        }
-    }
-
-    /**
-     * True when the tail can still be reached from the head after moving to
-     * {@code newHead} (the usual "did I close a loop on myself" check).
-     */
-    private boolean tailReachableAfter(int[] body, int newHead, boolean eats) {
-        int len = body.length;
-        int tailCell = len > 1 ? body[len - 2] : newHead;
-        Arrays.fill(occ2, false);
-        for (int i = 0; i < len; i++) {
-            occ2[body[i]] = true;
-        }
-        if (!eats) {
-            occ2[body[len - 1]] = false;
-        }
-        occ2[newHead] = true;
-        Arrays.fill(seen, false);
-        int qh = 0;
-        int qt = 0;
-        queue[qt++] = newHead;
-        seen[newHead] = true;
-        boolean reachedTail = false;
-        int area = 0;
-        while (qh < qt) {
-            int cur = queue[qh++];
-            area++;
-            if (cur == tailCell) {
-                reachedTail = true;
-            }
-            int cx = cur % cols;
-            int cy = cur / cols;
-            for (int k = 0; k < 4; k++) {
-                int nx = cx + DIRS[k][0];
-                int ny = cy + DIRS[k][1];
-                if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) {
-                    continue;
-                }
-                int n = ny * cols + nx;
-                if (seen[n] || (occ2[n] && n != tailCell)) {
-                    continue;
-                }
-                seen[n] = true;
-                queue[qt++] = n;
-            }
-        }
-        // Safe when the tail is still reachable and the open pocket is big enough
-        // to hold the whole body (otherwise the snake would slowly seal itself in).
-        return reachedTail && area >= len;
-    }
-
     int[] decide(int[] body, int food, int dirX, int dirY) {
         if (body.length == 0) {
             return null;
@@ -823,13 +597,7 @@ final class AutoPilot {
 
     /** Was the fruit still reachable on the last region search? */
     boolean lastFoodReachable() {
-        return regionFoodReachable;
-    }
-
-    /** A fruit was eaten: clear the loop guard (visits and window margin). */
-    void resetLoopGuard() {
-        Arrays.fill(visitCount, 0);
-        regionMargin = 0;
+        return true;
     }
 
     /** True when the fruit can be reached from the head through free cells. */
