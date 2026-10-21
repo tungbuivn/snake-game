@@ -23,6 +23,9 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      Nếu **route chạy qua một waypoint khác** (đi ngang qua điểm vàng/điểm khác trước khi
      tới lượt) thì app đánh dấu **`BROKEN`**: dấu ✕ đỏ ngay trên waypoint đó + dòng cảnh
      báo hồng ở thanh dưới (`BROKEN tại #3,#5`) để bạn đổi lại thứ tự.
+     Nếu **route đâm vào thân rắn** (mô phỏng cả đuôi di chuyển), app đánh dấu
+     **`COLLISION`**: ✕ đỏ + vòng tròn đỏ ngay ô sẽ đâm, kèm dòng hồng
+     `COLLISION: route đâm thân ở (x,y) • sửa waypoint`.
      Khi chọn 1 waypoint, app vẽ thêm **bóng rắn màu cam mờ**, **vẽ đè lên trên rắn thật**
      và **luôn đủ chiều dài thân**: đầu ở waypoint, thân đi ngược theo route; nếu route
      ngắn hơn thân thì phần còn lại lấy tiếp từ các đốt hiện có (đuôi thật) — nhờ vậy
@@ -158,6 +161,7 @@ muốn phát hành chính thức trên Play Store thì thay keystore riêng).
 | `PREVIEW (n)` (dưới cụm phím) | **Playback route hiện tại như video**: rắn thật **đứng yên**, một bóng rắn **xanh cyan** bò lại đúng các waypoint **đang có** (không lưu lịch sử cũ), có nhãn `PREVIEW i / n`; nút đổi thành **`THOÁT PREVIEW`** — bấm lần nữa hoặc chạm bất kỳ đâu là thoát và **chơi tiếp** đúng chỗ đang đứng |
 | `FOLLOW` (ô dưới-trái của cụm phím) | **Bám đuôi**: bấm 1 lần → *chờ chọn điểm* (chạm lên **một đốt trên thân rắn** để đặt điểm dừng); bấm lần nữa → chạy bám đuôi luôn. Rắn tự tìm đường (BFS) **chạy theo đuôi** (đuôi luôn di chuyển nên an toàn), dừng khi **đầu tới đúng điểm đã chọn**. Nút đổi thành **`STOP`** khi đang chạy để dừng tay |
 | `MOVE` / `DỪNG` (thanh dưới) | Cho rắn chạy theo route / dừng lại để sửa |
+| Menu tạm dừng | `TIẾP TỤC` để chạy tiếp; **chạm đúng chế độ đang chơi** (AUTO WIN / SHORT PATH / MANGO) = **resume** tiếp ván đó (giữ điểm), chạm chế độ khác = chơi lại ở chế độ đó |
 | Vuốt 4 hướng (chế độ AI) | Chuyển sang tự điều khiển (rắn đứng chờ waypoint) |
 | Chạm `CHƠI` / `AUTO WIN` / `SHORT PATH` / `MANGO` | Bắt đầu chế độ tương ứng (4 nút xếp dọc) |
 | Chạm `❚❚` (góc dưới phải) | Tạm dừng / tiếp tục |

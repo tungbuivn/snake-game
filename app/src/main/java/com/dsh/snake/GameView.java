@@ -2233,6 +2233,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + Math.round(padListBtn.centerY())
                     + " padReplay=" + Math.round(padReplayBtn.centerX()) + ","
                     + Math.round(padReplayBtn.centerY())
+                    + " coll=" + routeCollisions().size()
                     + " list=" + (wpListOpen ? 1 : 0)
                     + " follow=" + (following ? 1 : 0) + "/" + (followPicking ? 1 : 0)
                     + "/" + followStop
@@ -2363,12 +2364,26 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 }
                 return;
             case STATE_PAUSED:
+                // Tapping the mode you are already playing resumes that run;
+                // another mode starts the run again in that mode.
                 if (autoResumeBtn.contains(x, y)) {
-                    restartGame(MODE_AUTOWIN);
+                    if (mode == MODE_AUTOWIN && autoMode) {
+                        resumeGame();
+                    } else {
+                        restartGame(MODE_AUTOWIN);
+                    }
                 } else if (pathResumeBtn.contains(x, y)) {
-                    restartGame(MODE_SHORTPATH);
+                    if (mode == MODE_SHORTPATH && autoMode) {
+                        resumeGame();
+                    } else {
+                        restartGame(MODE_SHORTPATH);
+                    }
                 } else if (mangoResumeBtn.contains(x, y)) {
-                    restartGame(MODE_MANGO);
+                    if (mode == MODE_MANGO && autoMode) {
+                        resumeGame();
+                    } else {
+                        restartGame(MODE_MANGO);
+                    }
                 } else {
                     resumeGame();
                 }
@@ -2535,6 +2550,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 c.drawLine(tx + k, ty - k, tx - k, ty + k, padDelPaint);
             }
         }
+        // Cells where the planned route would hit the snake's own body.
+        for (int hit : routeCollisions()) {
+            float tx = boardLeft + (hit % COLS) * cell + half;
+            float ty = boardTop + (hit / COLS) * cell + half;
+            float k = cell * 0.30f;
+            c.drawLine(tx - k, ty - k, tx + k, ty + k, padDelPaint);
+            c.drawLine(tx + k, ty - k, tx - k, ty + k, padDelPaint);
+            c.drawCircle(tx, ty, cell * 0.40f, padDelPaint);
+        }
     }
 
     /**
@@ -2589,6 +2613,59 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * Walks the planned route with a simulated snake and returns the cells where
+     * the head would run into its own body (the first hit ends the walk, because
+     * the real snake would be cut there).
+     */
+    private ArrayList<Integer> routeCollisions() {
+        ArrayList<Integer> hits = new ArrayList<>();
+        if (body.isEmpty() || waypoints.isEmpty()) {
+            return hits;
+        }
+        ArrayList<Integer> route = routeCellsTo(waypoints.size() - 1);
+        if (route.isEmpty()) {
+            return hits;
+        }
+        int total = COLS * rows;
+        int bodyLen = body.size();
+        int cap = bodyLen + route.size() + 2;
+        boolean[] occ = new boolean[total];
+        int[] seq = new int[cap];
+        int n = 0;
+        // tail-first order, head at index n-1
+        for (int c : body) {
+            occ[c] = true;
+            n++;
+        }
+        int k = 0;
+        for (int c : body) {
+            seq[n - 1 - k++] = c;
+        }
+        int tailIdx = 0;
+        int headIdx = n - 1;
+        // route cells after the head
+        for (int i = 1; i < route.size(); i++) {
+            int c = route.get(i);
+            boolean eating = c == foodCell;
+            boolean isTailCell = c == seq[tailIdx] && !eating;
+            if (occ[c] && !isTailCell) {
+                hits.add(c);
+                break;
+            }
+            if (!eating) {
+                occ[seq[tailIdx]] = false;
+                tailIdx++;
+            }
+            if (headIdx + 1 >= cap) {
+                break;
+            }
+            seq[++headIdx] = c;
+            occ[c] = true;
+        }
+        return hits;
     }
 
     /**
@@ -3084,6 +3161,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         String hint;
         String broken = "";
+        boolean collision = false;
         if (autoMode) {
             hint = "AI đang chơi — chạm badge để tự điều khiển";
         } else if (mode == MODE_MANUAL) {
@@ -3103,12 +3181,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             broken = brokenLabel();
             if (broken.length() > 0 && !following && !followPicking) {
                 hint = "BROKEN tại #" + broken + "  •  đổi thứ tự waypoint";
+            } else if (broken.isEmpty() && !following && !followPicking
+                    && !waypoints.isEmpty()) {
+                ArrayList<Integer> hits = routeCollisions();
+                if (!hits.isEmpty()) {
+                    int hitCell = hits.get(0);
+                    hint = "COLLISION: route đâm thân ở (" + (hitCell % COLS) + ","
+                            + (hitCell / COLS) + ")  •  sửa waypoint";
+                }
             }
+            collision = hint.startsWith("COLLISION");
         } else {
             hint = "Vuốt để điều khiển";
         }
         hint += "  •  Chết: " + deaths;
-        hintPaint.setColor(broken.length() > 0 ? 0xFFFF8FA3 : 0xFF647699);
+        hintPaint.setColor(broken.length() > 0 || collision ? 0xFFFF8FA3 : 0xFF647699);
         c.drawText(hint, boardLeft + dp(2f), hintTop, hintPaint);
         hintPaint.setColor(0xFF647699);
         if (!autoMode && mode == MODE_MANUAL) {
