@@ -185,6 +185,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int dirX = 1;
     private int dirY = 0;
     private int foodCell = -1;
+    /** Cell of the fruit eaten this tick: it keeps drawing until the head lands. */
+    private int eatenCell = -1;
     private int score;
     private int highScore;
     private int deaths;
@@ -1223,6 +1225,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         dirQueue.clear();
         prevCells = cellsToArray();
         stallTicks = 0;
+        eatenCell = -1;
         score = 0;
         tickAccum = 0f;
         animTime = 0f;
@@ -1428,6 +1431,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 it.remove();
             }
         }
+        if (eatenCell >= 0 && interpolation() >= 0.999f) {
+            eatenCell = -1;     // the head has landed on it: stop drawing the corpse
+        }
         for (Iterator<Popup> it = popups.iterator(); it.hasNext(); ) {
             Popup p = it.next();
             p.life -= dt;
@@ -1521,6 +1527,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         int ni = ny * COLS + nx;
         boolean eats = ni == foodCell;
         prevCells = cellsToArray();
+        int tailBefore = body.peekLast() == null ? -1 : body.peekLast();
         if (!eats) {
             body.pollLast();
         }
@@ -1549,10 +1556,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             if (score > highScore) {
                 highScore = score;
             }
+            eatenCell = ni;
             spawnFood();
             spawnEatFx(nx, ny);
             popups.add(new Popup(nx, ny));
             haptic(false);
+            logLine("EAT head=" + ni + " prevHead=" + head + " tail=" + body.peekLast()
+                    + " tailBefore=" + tailBefore + " len=" + body.size());
             logEat();
             onFruitEaten();
         }
@@ -3372,14 +3382,45 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void drawFood(Canvas c) {
-        float fx = boardLeft + ((foodCell % COLS) + 0.5f) * cell;
-        float fy = boardTop + ((foodCell / COLS) + 0.5f) * cell;
-        float pulse = 1f + 0.07f * (float) Math.sin(animTime * 5.2f);
+        // The fruit that was just eaten keeps drawing (fading, slightly growing) for
+        // the rest of the tick: the head is still gliding into that cell, so the fruit
+        // must not vanish one cell in front of the snake's face.
+        if (eatenCell >= 0 && eatenCell != foodCell) {
+            float k = 1f - interpolation();
+            if (k > 0.03f) {
+                int a0 = foodPaint.getAlpha();
+                int a1 = foodGlowPaint.getAlpha();
+                int a2 = foodShinePaint.getAlpha();
+                int a3 = stemPaint.getAlpha();
+                int a4 = leafPaint.getAlpha();
+                foodPaint.setAlpha((int) (a0 * k));
+                foodGlowPaint.setAlpha((int) (a1 * k));
+                foodShinePaint.setAlpha((int) (a2 * k));
+                stemPaint.setAlpha((int) (a3 * k));
+                leafPaint.setAlpha((int) (a4 * k));
+                drawFruitAt(c, eatenCell, 1f + (1f - k) * 0.30f);
+                foodPaint.setAlpha(a0);
+                foodGlowPaint.setAlpha(a1);
+                foodShinePaint.setAlpha(a2);
+                stemPaint.setAlpha(a3);
+                leafPaint.setAlpha(a4);
+            }
+        }
+        if (foodCell >= 0) {
+            float pulse = 1f + 0.07f * (float) Math.sin(animTime * 5.2f);
+            drawFruitAt(c, foodCell, pulse);
+        }
+    }
+
+    /** One apple at the centre of {@code cellIdx}, scaled by {@code scale}. */
+    private void drawFruitAt(Canvas c, int cellIdx, float scale) {
+        float fx = boardLeft + ((cellIdx % COLS) + 0.5f) * cell;
+        float fy = boardTop + ((cellIdx / COLS) + 0.5f) * cell;
         float r = cell * 0.31f;
 
         c.save();
         c.translate(fx, fy);
-        c.scale(pulse, pulse);
+        c.scale(scale, scale);
         c.drawCircle(0f, 0f, cell * 1.8f, foodGlowPaint);
         c.drawCircle(0f, 0f, r, foodPaint);
 

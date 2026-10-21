@@ -161,7 +161,12 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
   5. **vạch vảy** bằng `PathMeasure` (dài tối đa 90 vạch, alpha rất thấp).
   Đầu là capsule to hơn thân (0.88×cell) có gradient, **bóng đổ dưới đầu + bóng cằm +
   vệt bóng bóng (specular)**, mắt (đồng tử + ánh sáng), lỗ mũi, mắt X khi thua — **không
-  vẽ lưỡi**. Đầu **nội suy mượt liên tục** từ ô cũ sang ô mới y như thân — **kể cả tick
+  vẽ lưỡi**. **Khi ăn quả, phần dài ra nằm ở ĐẦU** (`body.addFirst(cellMới)` và **không**
+  `pollLast()` ở tick đó, nên ô đuôi **không đổi**: log `EAT head=.. prevHead=.. tail=..
+  tailBefore=..` cho thấy `tail == tailBefore` ở mọi tick ăn) — nhờ vậy dữ liệu bám đuôi
+  của AI vẫn đúng. Quả vừa ăn **vẫn được vẽ** (mờ dần + hơi to ra) cho tới khi **đầu đặt
+  đúng vào ô đó** ở cuối tick, trước đây quả biến mất khi đầu còn cách 1 ô nên trông như
+  "đầu không dài ra". Đầu **nội suy mượt liên tục** từ ô cũ sang ô mới y như thân — **kể cả tick
   ăn quả** (trước đây tick ăn quả đặt đầu ngay vào tâm ô quả nên mắt thấy một cú nhảy
   đúng 1 ô); mũi đuôi cũng nội suy mượt. Vị trí vẽ lấy từ `tickAccum / interval()` nên
   **không phụ thuộc fps**: máy chậm vẫn thấy đầu trượt đều. Đuôi bo tròn đúng bằng
