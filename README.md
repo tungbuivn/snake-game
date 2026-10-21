@@ -42,15 +42,17 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      bấm `STOP` để dừng tay).
   2. `AUTO WIN` — **một** chu trình Hamilton **cố định** phủ toàn board (boustrophedon),
      luôn thắng, 0 chết.
-  3. `SHORT PATH` — **chu trình Hamilton boustrophedon cố định** (cùng engine với `AUTO WIN`):
+  3. `SHORT PATH` — **chu trình Hamilton kiểu "comb"** (2 dải ghép: mỗi nửa bàn là một dải
+     boustrophedon, rồi nối thành một vòng kín — `AutoPilot(..., comb=true)`):
      1. Mỗi tick rắn chỉ đi **tiến trên chu trình**, trong **cung trống giữa đầu và đuôi**;
         quả sinh trong cung đó nên **luôn tới được** và **không bao giờ bị dời**.
-     2. Trong cung, rắn đi **đường BFS ngắn nhất tới quả** (tắt đường trên chu trình) thay
-        vì bò từng ô → ăn nhanh hơn.
-     3. Thân luôn là một **đoạn liền trên chu trình** và chỉ dài thêm khi ăn, nên cung trống
-        co dần đều → **điền kín 240/240 ô** = **thắng**, **0 cắn thân, 0 đâm tường**.
-     Test `WIN RUN` xác nhận: **2 seed × 240/240 ô**, `winTick ≈ 3.4–3.8k` tick (~0,9 s/quả),
-     `bites=0`, `wall=0`.
+     2. Trong cung, rắn đi **đường BFS ngắn nhất tới quả** (tắt đường trên chu trình).
+     3. Thân luôn là một **đoạn liền trên chu trình** và chỉ dài thêm khi ăn → cung trống co
+        dần đều → **điền kín 240/240 ô** = **thắng**, **0 cắn thân, 0 đâm tường**.
+     Test `WIN RUN` xác nhận: **2 seed × 240/240 ô**, `winTick ≈ 4.3–4.7k` tick (~1 s/quả),
+     `bites=0`, `wall=0`, và `isComb()=true`.
+     (So sánh: `AUTO WIN` dùng chu trình boustrophedon 1 dải, `winTick ≈ 3.4–3.8k`; `MANGO`
+     dùng chu trình ngẫu nhiên 2-opt. Cả ba đều thắng.)
      **Vì sao bỏ greedy**: greedy "đường ngắn nhất + bám đuôi" đo được 645 quả/12k tick
      nhưng **tự bịt túi** rồi phải cắn thân (19–38 lần/ván) — không thể chứng minh thắng.
      Spiral/lawnmower dựng động cũng đã thử: spiral là **đường hở**, không khép vòng được

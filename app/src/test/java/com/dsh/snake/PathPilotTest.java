@@ -498,13 +498,14 @@ public final class PathPilotTest {
         long[] seeds = {424242L, 7L};
 
         System.out.println();
-        System.out.println("WIN RUN (boustrophedon cycle) " + total + " cells, up to "
+        System.out.println("WIN RUN (comb cycle) " + total + " cells, up to "
                 + steps + " ticks");
         boolean won = false;
+        boolean combUsed = true;
         int totalBites = 0;
         int totalWall = 0;
         for (long seed : seeds) {
-            AutoPilot pilot = new AutoPilot(cols, rows, false);
+            AutoPilot pilot = new AutoPilot(cols, rows, false, true);
             Random rnd = new Random(seed);
             int[] start = pilot.initialBody(4);
             ArrayList<Integer> body = new ArrayList<>();
@@ -520,6 +521,7 @@ public final class PathPilotTest {
             int maxLen = body.size();
             boolean thisWon = false;
             int winTick = -1;
+            combUsed &= pilot.isComb();
 
             for (int tick = 0; tick < steps; tick++) {
                 int[] cells = toArray(body);
@@ -566,6 +568,7 @@ public final class PathPilotTest {
         }
         System.out.println();
 
+        check("win: the comb (two-slab) cycle was built", combUsed);
         check("win: no self bite on the way to a full board", totalBites == 0);
         check("win: no wall death", totalWall == 0);
         check("win: the board gets filled (win state reached)", won);

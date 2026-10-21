@@ -33,7 +33,7 @@ final class AutoPilot {
     private static final int RANDOM_ITERATIONS = 250;
 
     /** Two strip cycles joined at the seam (variant B); false = one cycle (A). */
-    private static final boolean TWO_STRIPS = false;
+    /** Comb cycle (two merged slabs); selected per instance. */
 
     /* Generator-space directions (MangoSnake Cycle.java bit values). */
     private static final int G_UP = 8;
@@ -50,6 +50,8 @@ final class AutoPilot {
     private final int rows;
     private final int total;
     private final boolean randomizeCycle;
+    private final boolean useComb;
+    private boolean combBuilt;
     private final int[] cycleCell;
     private final int[] cycleIdx;
     private final int[] dist;
@@ -62,10 +64,16 @@ final class AutoPilot {
     }
 
     AutoPilot(int cols, int rows, boolean randomCycle) {
+        this(cols, rows, randomCycle, false);
+    }
+
+    /** @param combCycle true builds the comb (two-slab) cycle instead of the snake. */
+    AutoPilot(int cols, int rows, boolean randomCycle, boolean combCycle) {
         this.cols = cols;
         this.rows = rows;
         this.total = cols * rows;
         this.randomizeCycle = randomCycle;
+        this.useComb = combCycle;
         cycleCell = new int[total];
         cycleIdx = new int[total];
         dist = new int[total];
@@ -80,13 +88,20 @@ final class AutoPilot {
 
     private void buildCycle() {
         int[] next = new int[total];
+        combBuilt = false;
         boolean ok = randomizeCycle && randomCycle(next) && cycleValid(next);
         if (!ok) {
-            if (TWO_STRIPS && rows >= 6) {
+            if (useComb && rows >= 6) {
+                // Comb cycle: the board is split into two slabs (the "spine"), each
+                // walked as a boustrophedon strip and then merged into one loop. The
+                // teeth of the comb are the columns of the upper slab, so the free arc
+                // is cut into shorter pieces and the fruit is reached faster.
                 int mid = rows / 2;
                 linkStrip(next, 0, mid - 1);
                 linkStrip(next, mid, rows - 1);
-                if (!mergeStrips(next, mid - 1, mid)) {
+                if (mergeStrips(next, mid - 1, mid) && cycleValid(next)) {
+                    combBuilt = true;
+                } else {
                     linkStrip(next, 0, rows - 1);
                 }
             } else {
@@ -100,6 +115,11 @@ final class AutoPilot {
             cycleIdx[cur] = i;
             cur = next[cur];
         }
+    }
+
+    /** True when the comb (two-slab) cycle was built instead of the plain snake. */
+    boolean isComb() {
+        return combBuilt;
     }
 
     /** Gives the auto pilot a fresh random cycle (called when a game starts). */

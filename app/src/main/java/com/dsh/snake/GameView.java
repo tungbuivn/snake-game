@@ -191,6 +191,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int lastAutoMode = -1;
     private AutoPilot pilot;
     private AutoPilot mangoPilot;
+    /** Comb (two-slab) cycle used by SHORT PATH. */
+    private AutoPilot combPilot;
 
     private final ArrayList<Particle> particles = new ArrayList<>();
     private final ArrayList<Popup> popups = new ArrayList<>();
@@ -806,6 +808,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             // fresh randomized cycle (MangoSnake) on every game.
             pilot = new AutoPilot(COLS, rows, false);
             mangoPilot = new AutoPilot(COLS, rows, true);
+            combPilot = new AutoPilot(COLS, rows, false, true);
             if (state == STATE_READY) {
                 resetBoardState();
             }
@@ -1023,7 +1026,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      * chasing the fruit greedily, which could never be proven to win.
      */
     private AutoPilot activePilot() {
-        if (mode == MODE_AUTOWIN || mode == MODE_SHORTPATH) {
+        if (mode == MODE_SHORTPATH) {
+            // Comb (two-slab) cycle: same safety as AUTO WIN, different shape.
+            return combPilot != null ? combPilot : pilot;
+        }
+        if (mode == MODE_AUTOWIN) {
             return pilot;
         }
         if (mode == MODE_MANGO) {
