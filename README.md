@@ -164,17 +164,16 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
   vẽ lưỡi**. **Khi ăn quả, phần dài ra nằm ở ĐẦU** (`body.addFirst(cellMới)` và **không**
   `pollLast()` ở tick đó, nên ô đuôi **không đổi**: log `EAT head=.. prevHead=.. tail=..
   tailBefore=..` cho thấy `tail == tailBefore` ở mọi tick ăn) — nhờ vậy dữ liệu bám đuôi
-  của AI vẫn đúng. Đầu được vẽ **dẫn trước** (`previewCell`): cuối mỗi tick app tính sẵn
-  nước đi kế tiếp (đúng **1 lần `decide()`/tick**, không tốn thêm) rồi vẽ đầu lướt vào ô
-  đó. Nhờ vậy **đầu nằm đúng ô thật ở mọi ranh giới tick**, và **quả biến mất đúng lúc đầu
-  đặt vào ô quả** (trước đây vẽ trễ 1 tick nên quả mất khi đầu còn cách 1 ô — trông như
-  "ăn xong đầu chưa vào ô quả"). Đuôi cũng được vẽ thụt vào trong tick nên **độ dài hình
-  vẽ luôn = độ dài thân thật**; khi người chơi đổi hướng giữa tick thì bỏ dẫn trước, hình
-  đứng yên tới tick sau — **kể cả tick
-  ăn quả** (trước đây tick ăn quả đặt đầu ngay vào tâm ô quả nên mắt thấy một cú nhảy
-  đúng 1 ô); mũi đuôi cũng nội suy mượt. Vị trí vẽ lấy từ `tickAccum / interval()` nên
-  **không phụ thuộc fps**: máy chậm vẫn thấy đầu trượt đều. Đuôi bo tròn đúng bằng
-  bề rộng thân.
+  của AI vẫn đúng.
+  **Cách vẽ đầu (chốt)**: đầu luôn nội suy **từ ô nó vừa rời → đúng ô thật của nó**
+  (`prevCells[0] → body[0]`). Vì thế đầu **dính liền thân ở mọi lúc, kể cả khi rẽ** —
+  không bao giờ “văng” lên trước 1 ô, không bao giờ trôi qua ô quả rồi thụt lại. Đuôi
+  thụt vào trong cùng tick (tick ăn thì đuôi đứng yên) nên **độ dài hình vẽ = độ dài
+  thân thật**. Vị trí vẽ lấy từ `tickAccum / interval()` nên **không phụ thuộc fps**.
+  Để quả không “biến mất trước mặt”: quả vừa ăn **vẫn vẽ, mờ dần đúng trong tick đó**
+  (`eatenCell`, alpha `1-t`, to ra 0.25×) và quả mới **hiện dần** (`foodFresh`, alpha
+  `1.5t`) — nên quả cũ tắt **đúng lúc đầu đặt vào ô của nó**, không nhảy giật.
+  Đuôi bo tròn đúng bằng bề rộng thân.
 - **Game loop 60 fps**: render thread tự nhịp theo **lịch tuyệt đối 16.67 ms/frame**
   (`FRAME_NS`) — không phải kiểu "vẽ xong rồi `Thread.sleep(15)`" (cách đó cho chu kỳ
   25–35 ms nên hình bị giật). Khi bị trễ hơn 4 frame thì **resync** thay vì cố đuổi.
