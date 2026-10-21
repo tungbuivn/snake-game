@@ -186,6 +186,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int foodCell = -1;
     /** Current body cells, head first: the chain the renderer draws. */
     private int[] curCells = new int[0];
+    /** Body cells before the last step (manual play draws the head lagging behind). */
+    private int[] prevCells = new int[0];
+    /** Manual planning pause / replay: no step is coming, so the drawing is settled. */
+    private boolean planPaused;
     /** Predicted next step (unit direction) so the head can be drawn leading into it. */
     private int nextDx;
     private int nextDy;
@@ -1389,10 +1393,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             boolean planPause = replayMode
                     || (!autoMode && mode == MODE_MANUAL && !manualMoving && !following);
             if (planPause) {
-                // Waiting for waypoints / watching the replay: nothing moves.
+                // Waiting for waypoints / watching the replay: nothing moves, and the
+                // drawing must not stay frozen half-way through the last step.
+                planPaused = true;
                 tickAccum = 0f;
                 updateReplay(dt);
             } else {
+                planPaused = false;
                 foodTimer += dt;
                 // Steady stepping: no teleport / multi-step warp (it caused the
                 // stutter and hid what the snake was really doing).
@@ -1538,6 +1545,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         int ni = ny * COLS + nx;
         boolean eats = ni == foodCell;
+        prevCells = cellsToArray();
         int tailBefore = body.peekLast() == null ? -1 : body.peekLast();
         if (!eats) {
             body.pollLast();
@@ -1555,6 +1563,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             spawnDeathFx(nx, ny);
             haptic(true);
             curCells = cellsToArray();
+            prevCells = curCells;
             hasNext = false;
             return;
         }
@@ -1591,7 +1600,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      */
     private void predictNext() {
         hasNext = false;
-        if (state != STATE_RUNNING || body.isEmpty()) {
+        if (!autoMode || state != STATE_RUNNING || body.isEmpty()) {
+            // Manual play cannot know the next turn (the player decides), so it is drawn
+            // with the safe lag model instead of a guessed lead.
             return;
         }
         Integer headObj = body.peekFirst();
@@ -1619,10 +1630,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             dx = safe[0];
             dy = safe[1];
         } else {
-            // Manual play: predict straight ahead. Real input is applied at the next
-            // step and clears the prediction, so the drawn head never lies.
-            dx = dirX;
-            dy = dirY;
+            return;
         }
         int nx = head % COLS + dx;
         int ny = head / COLS + dy;
@@ -3538,6 +3546,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (state != STATE_RUNNING && state != STATE_PAUSED) {
             return 1f;
         }
+        if (planPaused) {
+            // No step is coming while the player plans: finish the drawing instead of
+            // leaving the head/tail a fraction of a cell behind (that looked like the
+            // snake retreating one cell every time it stopped).
+            return 1f;
+        }
         float iv = interval();
         if (iv <= 0f) {
             return 1f;
@@ -3562,9 +3576,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      * Layout: head tip, previous head cell, ... previous cells ..., tail tip.
      */
     private void computeDrawnPoints(int n, float t) {
-        int m = curCells.length;
-        int headCell = m > 0 ? curCells[0]
+        // Autoplay knows the next move, so the head leads into that cell with the body
+        // following. Manual play cannot know the next turn, so it falls back to the lag
+        // model: the head glides from the cell it just left into its own cell.
+        boolean lead = autoMode && hasNext;
+        int[] chain = lead ? curCells : prevCells;
+        int m = chain.length;
+        int realHead = curCells.length > 0 ? curCells[0]
                 : (body.peekFirst() == null ? 0 : body.peekFirst());
+        int headCell = m > 0 ? chain[0] : realHead;
         if (m == 0) {
             if (drawnPts.length < 2) {
                 drawnPts = new float[2];
@@ -3582,7 +3602,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         // The head slides from its real cell into the next one the logic will take,
         // while the body follows behind it (the cell it is leaving becomes the neck).
         // At t=1 the drawn chain is exactly the next body, so nothing ever snaps.
-        int leadCell = hasNext ? (headCell + nextDy * COLS + nextDx) : headCell;
+        int leadCell = lead ? (headCell + nextDy * COLS + nextDx) : realHead;
         float hx = cellPx(headCell);
         float hy = cellPy(headCell);
         drawnPts[0] = hx + (cellPx(leadCell) - hx) * t;
@@ -3590,23 +3610,25 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         int idx = 2;
         for (int i = 0; i < m - 1; i++) {
-            drawnPts[idx++] = cellPx(curCells[i]);
-            drawnPts[idx++] = cellPy(curCells[i]);
+            drawnPts[idx++] = cellPx(chain[i]);
+            drawnPts[idx++] = cellPy(chain[i]);
         }
 
         // The tail retires in the same tick, unless the coming step eats the apple (the
         // body grows, so the tail stays put for that tick).
-        boolean tailFreeze = hasNext && leadCell == foodCell;
+        // Eating freezes the tail for that tick (the body grows instead of retiring).
+        boolean tailFreeze = lead ? (leadCell == foodCell)
+                : (prevCells.length + 1 == curCells.length);
         if (!tailFreeze && m >= 2) {
-            float tx = cellPx(curCells[m - 1]);
-            float ty = cellPy(curCells[m - 1]);
-            float bx = cellPx(curCells[m - 2]);
-            float by = cellPy(curCells[m - 2]);
+            float tx = cellPx(chain[m - 1]);
+            float ty = cellPy(chain[m - 1]);
+            float bx = cellPx(chain[m - 2]);
+            float by = cellPy(chain[m - 2]);
             drawnPts[idx++] = tx + (bx - tx) * t;
             drawnPts[idx++] = ty + (by - ty) * t;
         } else {
-            drawnPts[idx++] = cellPx(curCells[m - 1]);
-            drawnPts[idx++] = cellPy(curCells[m - 1]);
+            drawnPts[idx++] = cellPx(chain[m - 1]);
+            drawnPts[idx++] = cellPy(chain[m - 1]);
         }
         drawnCount = idx / 2;
     }
