@@ -131,6 +131,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private final RectF smartBtn = new RectF();
     private final RectF zigBtn = new RectF();
     private final RectF rndBtn = new RectF();
+    private final RectF resetBtn = new RectF();
 
     /* --- manual FOLLOW: walk along the body / follow the tail ---------- */
     private boolean followPicking;
@@ -878,8 +879,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         speedPlusBtn.set(boardRect.right - sp, spBottom - sp, boardRect.right, spBottom);
         speedMinusBtn.set(boardRect.right - 2f * sp - dp(52f), spBottom - sp,
                 boardRect.right - sp - dp(52f), spBottom);
-        // Three AI toggles above the speed buttons: SC (safe shortcuts), ZZ (zig-zag
-        // longer path), RND (rebuild a random Hamiltonian cycle and restart).
+        // AI toggles above the speed buttons: RST (restart this run), SC (safe
+        // shortcuts), ZZ (zig-zag longer path), RND (random cycle, restart).
         float tb = dp(30f);
         float tRight = boardRect.right;
         float tBottom = spBottom - sp - dp(8f);
@@ -887,6 +888,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         zigBtn.set(tRight - 2f * tb - dp(6f), tBottom - tb, tRight - tb - dp(6f), tBottom);
         smartBtn.set(tRight - 3f * tb - dp(12f), tBottom - tb,
                 tRight - 2f * tb - dp(12f), tBottom);
+        resetBtn.set(tRight - 4f * tb - dp(18f), tBottom - tb,
+                tRight - 3f * tb - dp(18f), tBottom);
 
         rebuildShaders();
         rebuildStatic();
@@ -1210,6 +1213,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             autoMode = newMode != MODE_MANUAL;
             lastAutoMode = autoMode ? newMode : -1;
             clearRoute();
+            // The toggles are global: whatever is active is applied to the new run.
+            applyAiToggles();
             if (newMode == MODE_AUTO && randomCycleOn && randomPilot != null) {
                 // RND toggle: every run gets a fresh random cycle.
                 randomPilot.reshuffleRandomMerge();
@@ -2583,6 +2588,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + Math.round(zigBtn.centerY())
                     + " rndB=" + Math.round(rndBtn.centerX()) + ","
                     + Math.round(rndBtn.centerY())
+                    + " rstB=" + Math.round(resetBtn.centerX()) + ","
+                    + Math.round(resetBtn.centerY())
                     + " spM=" + Math.round(speedMinusBtn.centerX()) + ","
                     + Math.round(speedMinusBtn.centerY())
                     + " spP=" + Math.round(speedPlusBtn.centerX()) + ","
@@ -2679,6 +2686,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         if (speedPlusBtn.contains(x, y)) {
             changeSpeed(1);
+            return;
+        }
+        if (resetBtn.contains(x, y)) {
+            // RST: restart the current run (and the current mode) right away.
+            if (randomCycleOn && randomPilot != null && mode == MODE_AUTO) {
+                randomPilot.reshuffleRandomMerge();
+            }
+            applyAiToggles();
+            restartGame(mode);
+            haptic(true);
             return;
         }
         if (smartBtn.contains(x, y)) {
@@ -3620,10 +3637,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     /** Speed − / + with the current multiplier between them. */
     /** AI toggles: SC (safe shortcuts), ZZ (zig-zag), RND (new random cycle). */
+    /** AI toggles: RST (restart), SC (safe shortcuts), ZZ (zig-zag), RND (random cycle). */
     private void drawAiToggles(Canvas c) {
+        drawToggle(c, resetBtn, "RST", false);
         drawToggle(c, smartBtn, "SC", smartShortcuts);
         drawToggle(c, zigBtn, "ZZ", zigzagOn);
-        drawToggle(c, rndBtn, "RND", false);
+        drawToggle(c, rndBtn, "RND", randomCycleOn);
     }
 
     private void drawToggle(Canvas c, RectF r, String label, boolean on) {
