@@ -164,9 +164,13 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
   vẽ lưỡi**. **Khi ăn quả, phần dài ra nằm ở ĐẦU** (`body.addFirst(cellMới)` và **không**
   `pollLast()` ở tick đó, nên ô đuôi **không đổi**: log `EAT head=.. prevHead=.. tail=..
   tailBefore=..` cho thấy `tail == tailBefore` ở mọi tick ăn) — nhờ vậy dữ liệu bám đuôi
-  của AI vẫn đúng. Quả vừa ăn **vẫn được vẽ** (mờ dần + hơi to ra) cho tới khi **đầu đặt
-  đúng vào ô đó** ở cuối tick, trước đây quả biến mất khi đầu còn cách 1 ô nên trông như
-  "đầu không dài ra". Đầu **nội suy mượt liên tục** từ ô cũ sang ô mới y như thân — **kể cả tick
+  của AI vẫn đúng. Đầu được vẽ **dẫn trước** (`previewCell`): cuối mỗi tick app tính sẵn
+  nước đi kế tiếp (đúng **1 lần `decide()`/tick**, không tốn thêm) rồi vẽ đầu lướt vào ô
+  đó. Nhờ vậy **đầu nằm đúng ô thật ở mọi ranh giới tick**, và **quả biến mất đúng lúc đầu
+  đặt vào ô quả** (trước đây vẽ trễ 1 tick nên quả mất khi đầu còn cách 1 ô — trông như
+  "ăn xong đầu chưa vào ô quả"). Đuôi cũng được vẽ thụt vào trong tick nên **độ dài hình
+  vẽ luôn = độ dài thân thật**; khi người chơi đổi hướng giữa tick thì bỏ dẫn trước, hình
+  đứng yên tới tick sau — **kể cả tick
   ăn quả** (trước đây tick ăn quả đặt đầu ngay vào tâm ô quả nên mắt thấy một cú nhảy
   đúng 1 ô); mũi đuôi cũng nội suy mượt. Vị trí vẽ lấy từ `tickAccum / interval()` nên
   **không phụ thuộc fps**: máy chậm vẫn thấy đầu trượt đều. Đuôi bo tròn đúng bằng

@@ -185,8 +185,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int dirX = 1;
     private int dirY = 0;
     private int foodCell = -1;
-    /** Cell of the fruit eaten this tick: it keeps drawing until the head lands. */
-    private int eatenCell = -1;
+    /**
+     * Cell the head will move into at the next tick, pre-computed at the end of the
+     * previous one. The head is drawn LEADING into it, so it sits exactly on its real
+     * cell at every tick boundary (no one-tick lag: the fruit disappears exactly when
+     * the head arrives, not one cell in front of its face).
+     */
+    private int previewCell = -1;
     private int score;
     private int highScore;
     private int deaths;
@@ -1225,7 +1230,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         dirQueue.clear();
         prevCells = cellsToArray();
         stallTicks = 0;
-        eatenCell = -1;
+        previewCell = -1;
         score = 0;
         tickAccum = 0f;
         animTime = 0f;
@@ -1431,9 +1436,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 it.remove();
             }
         }
-        if (eatenCell >= 0 && interpolation() >= 0.999f) {
-            eatenCell = -1;     // the head has landed on it: stop drawing the corpse
-        }
+
         for (Iterator<Popup> it = popups.iterator(); it.hasNext(); ) {
             Popup p = it.next();
             p.life -= dt;
@@ -1458,7 +1461,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             dirQueue.clear();
             int[] d = null;
             AutoPilot cycle = activePilot();
-            if (cycle != null) {
+            if (previewCell >= 0) {
+                // Reuse the move that was already decided at the end of the previous
+                // tick (that is what the head was drawn leading into): one decide()
+                // per tick, and the picture can never disagree with the logic.
+                Integer headNow = body.peekFirst();
+                if (headNow != null) {
+                    d = new int[]{previewCell % COLS - headNow % COLS,
+                            previewCell / COLS - headNow / COLS};
+                }
+                previewCell = -1;
+            } else if (cycle != null) {
                 // Every AI mode walks the classic Hamiltonian cycle: forward only,
                 // inside the free arc between the head and the tail. SHORT PATH uses
                 // the fixed boustrophedon cycle too, so it fills the board (a win)
@@ -1526,7 +1539,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         int ni = ny * COLS + nx;
         boolean eats = ni == foodCell;
-        prevCells = cellsToArray();
         int tailBefore = body.peekLast() == null ? -1 : body.peekLast();
         if (!eats) {
             body.pollLast();
@@ -1543,6 +1555,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             registerDeath("bite");
             spawnDeathFx(nx, ny);
             haptic(true);
+            prevCells = cellsToArray();
+            previewCell = -1;
             return;
         }
         body.addFirst(ni);
@@ -1556,7 +1570,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             if (score > highScore) {
                 highScore = score;
             }
-            eatenCell = ni;
             spawnFood();
             spawnEatFx(nx, ny);
             popups.add(new Popup(nx, ny));
@@ -1566,6 +1579,55 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             logEat();
             onFruitEaten();
         }
+        prevCells = cellsToArray();
+        updatePreview();
+    }
+
+    /**
+     * Pre-computes the cell the head will step into at the next tick. The renderer
+     * draws the head <em>leading</em> into that cell, so at every tick boundary the
+     * drawn head is exactly on its real cell and it glides into the next one in
+     * between. (Drawing it lagging one tick behind is what made the fruit vanish a
+     * whole cell in front of the snake's face.)
+     */
+    private void updatePreview() {
+        previewCell = -1;
+        if (state != STATE_RUNNING || body.isEmpty()) {
+            return;
+        }
+        Integer headObj = body.peekFirst();
+        if (headObj == null) {
+            return;
+        }
+        int headNow = headObj;
+        int nx;
+        int ny;
+        if (autoMode) {
+            AutoPilot cycle = activePilot();
+            if (cycle == null) {
+                return;
+            }
+            int[] d = cycle.decide(cellsToArray(), foodCell, dirX, dirY);
+            if (d == null) {
+                return;
+            }
+            nx = headNow % COLS + d[0];
+            ny = headNow / COLS + d[1];
+        } else {
+            // Manual play: assume the snake keeps its current direction; any queued
+            // turn clears the preview, so the head never leads the wrong way.
+            nx = headNow % COLS + dirX;
+            ny = headNow / COLS + dirY;
+        }
+        if (nx < 0 || nx >= COLS || ny < 0 || ny >= rows) {
+            return;
+        }
+        int cell = ny * COLS + nx;
+        int tailCell = body.peekLast() == null ? -1 : body.peekLast();
+        if (body.contains(cell) && cell != tailCell) {
+            return;
+        }
+        previewCell = cell;
     }
 
     /** Debug log: one timestamped line per event. */
@@ -2915,6 +2977,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     lastAutoMode = mode;
                     mode = MODE_MANUAL;
                     autoMode = false;
+                    previewCell = -1;
                     clearRoute();
                     tickAccum = 0f;
                 }
@@ -2937,6 +3000,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             lastAutoMode = mode;
             autoMode = false;
             mode = MODE_MANUAL;
+            previewCell = -1;
             dirQueue.clear();
             clearRoute();
             tickAccum = 0f;
@@ -2955,6 +3019,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             return;
         }
         dirQueue.add(new int[]{dx, dy});
+        previewCell = -1;   // the guessed next cell is no longer right
     }
 
     /* ------------------------------------------------------------------ */
@@ -3382,30 +3447,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void drawFood(Canvas c) {
-        // The fruit that was just eaten keeps drawing (fading, slightly growing) for
-        // the rest of the tick: the head is still gliding into that cell, so the fruit
-        // must not vanish one cell in front of the snake's face.
-        if (eatenCell >= 0 && eatenCell != foodCell) {
-            float k = 1f - interpolation();
-            if (k > 0.03f) {
-                int a0 = foodPaint.getAlpha();
-                int a1 = foodGlowPaint.getAlpha();
-                int a2 = foodShinePaint.getAlpha();
-                int a3 = stemPaint.getAlpha();
-                int a4 = leafPaint.getAlpha();
-                foodPaint.setAlpha((int) (a0 * k));
-                foodGlowPaint.setAlpha((int) (a1 * k));
-                foodShinePaint.setAlpha((int) (a2 * k));
-                stemPaint.setAlpha((int) (a3 * k));
-                leafPaint.setAlpha((int) (a4 * k));
-                drawFruitAt(c, eatenCell, 1f + (1f - k) * 0.30f);
-                foodPaint.setAlpha(a0);
-                foodGlowPaint.setAlpha(a1);
-                foodShinePaint.setAlpha(a2);
-                stemPaint.setAlpha(a3);
-                leafPaint.setAlpha(a4);
-            }
-        }
         if (foodCell >= 0) {
             float pulse = 1f + 0.07f * (float) Math.sin(animTime * 5.2f);
             drawFruitAt(c, foodCell, pulse);
@@ -3440,11 +3481,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private float interpolation() {
         if (state != STATE_RUNNING && state != STATE_PAUSED) {
-            return 1f;
+            // Not running: the head is drawn on its real cell (t=0), never leading.
+            return 0f;
         }
         float iv = interval();
         if (iv <= 0f) {
-            return 1f;
+            return 0f;
         }
         return Math.max(0f, Math.min(1f, tickAccum / iv));
     }
@@ -3468,6 +3510,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private void computeDrawnPoints(int n, float t) {
         int m = prevCells.length;
         int newHead = body.peekFirst() == null ? 0 : body.peekFirst();
+        int leadCell = previewCell >= 0 ? previewCell : newHead;
         if (m == 0) {
             if (drawnPts.length < 2) {
                 drawnPts = new float[2];
@@ -3484,11 +3527,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         float hx = cellPx(prevCells[0]);
         float hy = cellPy(prevCells[0]);
-        // The head glides from its previous cell to the new one, continuously - also
-        // on the tick that eats a fruit (snapping it a whole cell there was the last
-        // remaining "jerk" the eye could catch).
-        drawnPts[0] = hx + (cellPx(newHead) - hx) * t;
-        drawnPts[1] = hy + (cellPy(newHead) - hy) * t;
+        // The head glides from its real cell into the pre-computed next one, so at
+        // t=0 it is exactly where the logic says it is and it lands on the next cell
+        // exactly when the logic steps there.
+        drawnPts[0] = hx + (cellPx(leadCell) - hx) * t;
+        drawnPts[1] = hy + (cellPy(leadCell) - hy) * t;
 
         int idx = 2;
         for (int i = 0; i < m - 1; i++) {
@@ -3496,9 +3539,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             drawnPts[idx++] = cellPy(prevCells[i]);
         }
 
-        // Growing (ate this tick): the tail stays where it is.
-        boolean grown = (m == n - 1);
-        if (!grown && m >= 2) {
+        // The next step eats, so the tail will stay where it is; otherwise it retires
+        // one cell and the tip is drawn moving forward with it. Without a preview (the
+        // player just turned) nothing is animated: the snake waits for the next tick.
+        boolean willEat = previewCell >= 0 && previewCell == foodCell;
+        if (!willEat && previewCell >= 0 && m >= 2) {
             float tx = cellPx(prevCells[m - 1]);
             float ty = cellPy(prevCells[m - 1]);
             float bx = cellPx(prevCells[m - 2]);
