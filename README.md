@@ -156,10 +156,10 @@ muốn phát hành chính thức trên Play Store thì thay keystore riêng).
 | --- | --- |
 | Chạm lên board (chế độ `CHƠI`) | Đặt waypoint mới; chạm vào waypoint có sẵn để chọn nó |
 | 4 phím mũi tên / `✕` | Dịch waypoint đang chọn 1 ô / xoá waypoint đó |
-| `AUTO` (giữa 4 mũi tên) | **Tự đặt waypoint**: lấy đường ngắn nhất đầu→quả (BFS, thân là tường) và chỉ giữ các **điểm gấp khúc** + quả, nên route chữ L giữa 2 waypoint đúng bằng đường ngắn nhất |
+| `AUTO` (giữa 4 mũi tên) | **Tự đặt waypoint an toàn**: lấy đường ngắn nhất đầu→quả (BFS, thân là tường), **mô phỏng ăn xong** rồi kiểm tra **vẫn còn đường bám đuôi**; chỉ khi qua mới đặt route (chỉ giữ **điểm gấp khúc** + quả). Không an toàn thì **tự chuyển sang route bám đuôi** để rắn không chết |
 | `LIST` (đối xứng với `✕`) | Mở **hộp thoại danh sách waypoint**: mỗi dòng ghi số thứ tự + toạ độ ô; **kéo-thả dòng** để đổi thứ tự (thả tới đâu là chèn tới đó), chạm 1 dòng để chọn nó, chạm ra ngoài hoặc `✕` để đóng |
 | `PREVIEW (n)` (dưới cụm phím) | **Playback route hiện tại như video**: rắn thật **đứng yên**, một bóng rắn **xanh cyan** bò lại đúng các waypoint **đang có** (không lưu lịch sử cũ), có nhãn `PREVIEW i / n`; nút đổi thành **`THOÁT PREVIEW`** — bấm lần nữa hoặc chạm bất kỳ đâu là thoát và **chơi tiếp** đúng chỗ đang đứng |
-| `FOLLOW` (ô dưới-trái của cụm phím) | **Bám đuôi**: bấm 1 lần → *chờ chọn điểm* (chạm lên **một đốt trên thân rắn** để đặt điểm dừng); bấm lần nữa → chạy bám đuôi luôn. Rắn tự tìm đường (BFS) **chạy theo đuôi** (đuôi luôn di chuyển nên an toàn), dừng khi **đầu tới đúng điểm đã chọn**. Nút đổi thành **`STOP`** khi đang chạy để dừng tay |
+| `FOLLOW` (ô dưới-trái của cụm phím) | **Bám đuôi**: bấm 1 lần → *chờ chọn điểm* (chạm lên **một đốt trên thân rắn** để đặt điểm dừng); bấm lần nữa → chạy bám đuôi luôn. Rắn tự tìm đường (BFS) **chạy theo đuôi** và **luôn giữ khoảng cách ≥ 2 ô tới đuôi** (để lúc ăn quả, đuôi có dài ra thêm 1 đốt vẫn còn khoảng an toàn mà bám); dừng khi **đầu tới đúng điểm đã chọn**. Nút đổi thành **`STOP`** khi đang chạy |
 | `MOVE` / `DỪNG` (thanh dưới) | Cho rắn chạy theo route / dừng lại để sửa |
 | Menu tạm dừng | `TIẾP TỤC` để chạy tiếp; chạm **AUTO WIN / SHORT PATH / MANGO** = **bật lại AI cho đúng ván đang chơi** (giữ điểm) — kể cả khi bạn vừa vuốt/chạm badge để giành quyền điều khiển tay; nếu ván đang ở chế độ khác thì nút đó sẽ chơi lại ở chế độ mới |
 | Vuốt 4 hướng (chế độ AI) | Chuyển sang tự điều khiển (rắn đứng chờ waypoint) |

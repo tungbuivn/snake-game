@@ -1481,29 +1481,102 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             return false;
         }
         int tail = body.peekLast();
-        // While the picked point is still covered by the body, walk after the
-        // tail; once it frees up, steer straight to it and stop there.
-        int target = tail;
+        // Steer straight to the picked point once it is free again.
         if (followStop >= 0 && followStop != tail && !body.contains(followStop)) {
-            target = followStop;
+            int[] toStop = findPathTo(cellsToArray(), followStop);
+            if (toStop != null && toStop.length >= 2) {
+                int next = toStop[1];
+                dirX = (next % COLS) - (head % COLS);
+                dirY = (next / COLS) - (head / COLS);
+                return true;
+            }
         }
-        int[] path = findPathTo(cellsToArray(), target);
-        if (path == null || path.length < 2) {
+        // Otherwise keep chasing the tail but KEEP A 2-CELL GAP: the head must
+        // stay at least two free steps behind the tail, so an unexpected fruit
+        // (which delays the tail by one step while the snake grows) cannot make
+        // the snake bite itself.
+        int[] tailDist = distFromTail();
+        int hx = head % COLS;
+        int hy = head / COLS;
+        int bestGap = -1;
+        int bestDir = -1;
+        int bestAny = -1;
+        int bestAnyDist = -1;
+        for (int k = 0; k < 4; k++) {
+            int nx = hx + NEIGH[k][0];
+            int ny = hy + NEIGH[k][1];
+            if (nx < 0 || nx >= COLS || ny < 0 || ny >= rows) {
+                continue;
+            }
+            int n = ny * COLS + nx;
+            int d = tailDist[n];
+            if (d < 0) {
+                continue;
+            }
+            if (d >= 3) {
+                // closest to the tail while keeping at least a 2-cell gap after
+                // the move (the tail advances one cell every step)
+                if (bestDir < 0 || d < bestGap) {
+                    bestGap = d;
+                    bestDir = k;
+                }
+            }
+            if (d > bestAnyDist) {
+                bestAnyDist = d;
+                bestAny = k;
+            }
+        }
+        int pick = bestDir >= 0 ? bestDir : bestAny;
+        if (pick < 0) {
             following = false;
             tickAccum = 0f;
             return false;
         }
-        int hx = head % COLS;
-        int hy = head / COLS;
-        // path[0] is the head itself, path[1] is the first step.
-        int next = path[1];
-        dirX = (next % COLS) - hx;
-        dirY = (next / COLS) - hy;
-        if (Math.abs(dirX) + Math.abs(dirY) != 1) {
-            following = false;
-            return false;
-        }
+        dirX = NEIGH[pick][0];
+        dirY = NEIGH[pick][1];
         return true;
+    }
+
+    /** BFS distance from the tail over free cells (the body is a wall). */
+    private int[] distFromTail() {
+        int total = COLS * rows;
+        boolean[] occ = new boolean[total];
+        for (int c : body) {
+            occ[c] = true;
+        }
+        int[] dist = new int[total];
+        java.util.Arrays.fill(dist, -1);
+        int[] queue = new int[total];
+        int start = body.peekLast();
+        // The head cell itself counts as reachable so the gap can be measured.
+        Integer headCell = body.peekFirst();
+        if (headCell != null) {
+            occ[headCell] = false;
+        }
+        int qh = 0;
+        int qt = 0;
+        dist[start] = 0;
+        queue[qt++] = start;
+        occ[start] = false;
+        while (qh < qt) {
+            int cur = queue[qh++];
+            int cx = cur % COLS;
+            int cy = cur / COLS;
+            for (int k = 0; k < 4; k++) {
+                int nx = cx + NEIGH[k][0];
+                int ny = cy + NEIGH[k][1];
+                if (nx < 0 || nx >= COLS || ny < 0 || ny >= rows) {
+                    continue;
+                }
+                int n = ny * COLS + nx;
+                if (occ[n] || dist[n] >= 0) {
+                    continue;
+                }
+                dist[n] = dist[cur] + 1;
+                queue[qt++] = n;
+            }
+        }
+        return dist;
     }
 
     private boolean stepManualPath() {
@@ -1877,26 +1950,158 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             haptic(true);
             return;
         }
-        ArrayList<Integer> wps = new ArrayList<>();
-        for (int i = 1; i < path.length; i++) {
-            boolean corner;
-            if (i == path.length - 1) {
-                corner = true;
-            } else {
-                int d1x = (path[i] % COLS) - (path[i - 1] % COLS);
-                int d1y = (path[i] / COLS) - (path[i - 1] / COLS);
-                int d2x = (path[i + 1] % COLS) - (path[i] % COLS);
-                int d2y = (path[i + 1] / COLS) - (path[i] / COLS);
-                corner = d1x != d2x || d1y != d2y;
-            }
-            if (corner) {
-                wps.add(path[i]);
+        // Only accept the fruit route when the snake can still follow its tail
+        // after eating it; otherwise fall back to a route that follows the tail.
+        ArrayList<Integer> route = toList(path);
+        int[] wps = safeRouteCorners(route);
+        if (wps == null) {
+            int[] tailPath = findPathTo(cellsToArray(), body.peekLast());
+            if (tailPath != null && tailPath.length >= 2) {
+                wps = routeCorners(toList(tailPath));
             }
         }
+        if (wps == null || wps.length == 0) {
+            haptic(true);
+            return;
+        }
         waypoints.clear();
-        waypoints.addAll(wps);
+        for (int c : wps) {
+            waypoints.add(c);
+        }
         selectedWp = waypoints.isEmpty() ? -1 : 0;
         haptic(false);
+    }
+
+    private ArrayList<Integer> toList(int[] path) {
+        ArrayList<Integer> out = new ArrayList<>(path.length);
+        for (int c : path) {
+            out.add(c);
+        }
+        return out;
+    }
+
+    /** Corners of a route (the first cell is the head and is skipped). */
+    private int[] routeCorners(ArrayList<Integer> route) {
+        ArrayList<Integer> wps = new ArrayList<>();
+        for (int i = 1; i < route.size(); i++) {
+            boolean corner;
+            if (i == route.size() - 1) {
+                corner = true;
+            } else {
+                int a = route.get(i - 1);
+                int b = route.get(i);
+                int c = route.get(i + 1);
+                corner = (b % COLS - a % COLS) != (c % COLS - b % COLS)
+                        || (b / COLS - a / COLS) != (c / COLS - b / COLS);
+            }
+            if (corner) {
+                wps.add(route.get(i));
+            }
+        }
+        int[] out = new int[wps.size()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = wps.get(i);
+        }
+        return out;
+    }
+
+    /** Corners of the route when it is safe, else null. */
+    private int[] safeRouteCorners(ArrayList<Integer> route) {
+        int[] after = simulateRoute(route);
+        if (after == null || after.length < 2) {
+            return null;
+        }
+        if (!tailReachableIn(after)) {
+            return null;
+        }
+        return routeCorners(route);
+    }
+
+    /**
+     * Walks the route over a virtual snake (growing on the fruit) and returns the
+     * resulting body (head first), or null when the head would hit the body.
+     */
+    private int[] simulateRoute(ArrayList<Integer> route) {
+        int total = COLS * rows;
+        int bodyLen = body.size();
+        if (bodyLen == 0 || route.isEmpty()) {
+            return null;
+        }
+        int cap = bodyLen + route.size() + 2;
+        boolean[] occ = new boolean[total];
+        int[] seq = new int[cap];
+        int k = 0;
+        for (int c : body) {
+            seq[bodyLen - 1 - k++] = c;   // tail first, head last
+            occ[c] = true;
+        }
+        int tailIdx = 0;
+        int headIdx = bodyLen - 1;
+        for (int i = 1; i < route.size(); i++) {
+            int c = route.get(i);
+            boolean eating = c == foodCell;
+            boolean tailFree = c == seq[tailIdx] && !eating;
+            if (occ[c] && !tailFree) {
+                return null;
+            }
+            if (!eating) {
+                occ[seq[tailIdx]] = false;
+                tailIdx++;
+            }
+            if (headIdx + 1 >= cap) {
+                return null;
+            }
+            seq[++headIdx] = c;
+            occ[c] = true;
+        }
+        int len = headIdx - tailIdx + 1;
+        int[] out = new int[len];
+        for (int i = 0; i < len; i++) {
+            out[i] = seq[headIdx - i];
+        }
+        return out;
+    }
+
+    /** Head can reach the tail through free cells of the given body. */
+    private boolean tailReachableIn(int[] cells) {
+        if (cells.length <= 2) {
+            return true;
+        }
+        int total = COLS * rows;
+        boolean[] occ = new boolean[total];
+        for (int c : cells) {
+            occ[c] = true;
+        }
+        int[] dist = new int[total];
+        java.util.Arrays.fill(dist, -1);
+        int[] queue = new int[total];
+        int target = cells[cells.length - 1];
+        int qh = 0;
+        int qt = 0;
+        dist[cells[0]] = 0;
+        queue[qt++] = cells[0];
+        while (qh < qt) {
+            int cur = queue[qh++];
+            if (cur == target) {
+                return true;
+            }
+            int cx = cur % COLS;
+            int cy = cur / COLS;
+            for (int k = 0; k < 4; k++) {
+                int nx = cx + NEIGH[k][0];
+                int ny = cy + NEIGH[k][1];
+                if (nx < 0 || nx >= COLS || ny < 0 || ny >= rows) {
+                    continue;
+                }
+                int n = ny * COLS + nx;
+                if (dist[n] >= 0 || (occ[n] && n != target)) {
+                    continue;
+                }
+                dist[n] = dist[cur] + 1;
+                queue[qt++] = n;
+            }
+        }
+        return false;
     }
 
     /**
@@ -2262,6 +2467,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + " padReplay=" + Math.round(padReplayBtn.centerX()) + ","
                     + Math.round(padReplayBtn.centerY())
                     + " coll=" + routeCollisions().size()
+                    + " gap=" + (body.size() > 1 ? distFromTail()[body.peekFirst()] : -1)
                     + " list=" + (wpListOpen ? 1 : 0)
                     + " follow=" + (following ? 1 : 0) + "/" + (followPicking ? 1 : 0)
                     + "/" + followStop
