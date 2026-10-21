@@ -18,7 +18,7 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      điểm hoặc xoá; có **đường preview nét đứt mờ** (đi ngang trước, rồi dọc) và nút
      **`MOVE`** để rắn chạy theo route (đang chạy thì nút đổi thành `DỪNG`); hết waypoint
      thì rắn tự đứng lại. Chưa bấm `MOVE` thì rắn **không di chuyển**.
-     Nút **`REPLAY`** xem lại toàn bộ đường đi như một đoạn video (bóng xanh cyan chạy
+     Nút **`PREVIEW`** xem lại route **hiện tại** như một đoạn video (bóng xanh cyan chạy
      trên route, rắn thật đứng yên); thoát replay là chơi tiếp bình thường.
      Khi chọn 1 waypoint, app vẽ thêm **bóng rắn màu cam mờ**, **vẽ đè lên trên rắn thật**
      và **luôn đủ chiều dài thân**: đầu ở waypoint, thân đi ngược theo route; nếu route
@@ -147,7 +147,7 @@ muốn phát hành chính thức trên Play Store thì thay keystore riêng).
 | 4 phím mũi tên / `✕` | Dịch waypoint đang chọn 1 ô / xoá waypoint đó |
 | `AUTO` (giữa 4 mũi tên) | **Tự đặt waypoint**: lấy đường ngắn nhất đầu→quả (BFS, thân là tường) và chỉ giữ các **điểm gấp khúc** + quả, nên route chữ L giữa 2 waypoint đúng bằng đường ngắn nhất |
 | `LIST` (đối xứng với `✕`) | Mở **hộp thoại danh sách waypoint**: mỗi dòng ghi số thứ tự + toạ độ ô; **kéo-thả dòng** để đổi thứ tự (thả tới đâu là chèn tới đó), chạm 1 dòng để chọn nó, chạm ra ngoài hoặc `✕` để đóng |
-| `REPLAY (n)` (dưới cụm phím) | **Playback đường đi như video**: rắn thật **đứng yên**, một bóng rắn **xanh cyan** bò lại toàn bộ route đã ghi (nối tất cả waypoint trong lịch sử) với nhãn `REPLAY i / n`; nút đổi thành **`THOÁT REPLAY`** — bấm lần nữa hoặc chạm bất kỳ đâu là thoát, **chơi tiếp** đúng chỗ đang đứng |
+| `PREVIEW (n)` (dưới cụm phím) | **Playback route hiện tại như video**: rắn thật **đứng yên**, một bóng rắn **xanh cyan** bò lại đúng các waypoint **đang có** (không lưu lịch sử cũ), có nhãn `PREVIEW i / n`; nút đổi thành **`THOÁT PREVIEW`** — bấm lần nữa hoặc chạm bất kỳ đâu là thoát và **chơi tiếp** đúng chỗ đang đứng |
 | `MOVE` / `DỪNG` (thanh dưới) | Cho rắn chạy theo route / dừng lại để sửa |
 | Vuốt 4 hướng (chế độ AI) | Chuyển sang tự điều khiển (rắn đứng chờ waypoint) |
 | Chạm `CHƠI` / `AUTO WIN` / `SHORT PATH` / `MANGO` | Bắt đầu chế độ tương ứng (4 nút xếp dọc) |
@@ -160,7 +160,7 @@ Cụm phím chỉnh waypoint (nằm góc dưới-trái board):
 [LIST]  [ ▲ ]  [ ✕ ]
 [ ◀  ]  [AUTO] [ ▶ ]
         [ ▼ ]
-   [ REPLAY (n) ]     ← phát lại toàn bộ lịch sử waypoint
+   [ PREVIEW (n) ]     ← phát lại route hiện tại (các waypoint đang có)
 ```
 
 HUD hiện `ĐIỂM`, `KỶ LỤC`, badge tên chế độ AI, và thanh dưới có `Chết: N` — mỗi lần

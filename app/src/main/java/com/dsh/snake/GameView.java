@@ -124,8 +124,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private final RectF padListBtn = new RectF();
     private final RectF padReplayBtn = new RectF();
     private final RectF padPanel = new RectF();
-    /** Every waypoint ever placed in this run; REPLAY walks them again. */
-    private final ArrayList<Integer> wpHistory = new ArrayList<>();
 
     /* --- drag & drop waypoint list dialog ------------------------------ */
     private boolean wpListOpen;
@@ -1570,7 +1568,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         // A waypoint may sit on the body: by the time the snake gets there the
         // tail has usually moved on, so the cell is free again.
         waypoints.add(c);
-        wpHistory.add(c);
         selectedWp = waypoints.size() - 1;
         haptic(false);
     }
@@ -1772,7 +1769,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         waypoints.clear();
         waypoints.addAll(wps);
-        wpHistory.addAll(wps);
         selectedWp = waypoints.isEmpty() ? -1 : 0;
         haptic(false);
     }
@@ -1787,14 +1783,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             stopReplay();
             return;
         }
-        if (wpHistory.isEmpty() || body.isEmpty()) {
+        if (waypoints.isEmpty() || body.isEmpty()) {
             haptic(true);
             return;
         }
         ArrayList<Integer> cells = new ArrayList<>();
         int cur = body.peekFirst();
         cells.add(cur);
-        for (int wp : wpHistory) {
+        for (int wp : waypoints) {
             int cx = cur % COLS;
             int cy = cur / COLS;
             int tx = wp % COLS;
@@ -1871,7 +1867,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         int headCell = replayPath[replayPos];
         c.drawCircle(boardLeft + (headCell % COLS) * cell + half,
                 boardTop + (headCell / COLS) * cell + half, cell * 0.40f, replayHeadPaint);
-        c.drawText("REPLAY " + replayPos + " / " + (replayPath.length - 1),
+        c.drawText("PREVIEW " + replayPos + " / " + (replayPath.length - 1),
                 boardLeft + (headCell % COLS) * cell + half,
                 boardTop + (headCell / COLS) * cell - cell * 0.62f, replayLabelPaint);
     }
@@ -1936,7 +1932,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void clearRoute() {
         waypoints.clear();
-        wpHistory.clear();
         selectedWp = -1;
         manualMoving = false;
         wpListOpen = false;
@@ -2137,7 +2132,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + Math.round(padListBtn.centerY())
                     + " padReplay=" + Math.round(padReplayBtn.centerX()) + ","
                     + Math.round(padReplayBtn.centerY())
-                    + " hist=" + wpHistory.size()
                     + " list=" + (wpListOpen ? 1 : 0)
                     + " replay=" + (replayMode ? 1 : 0) + "/" + replayPos
                     + "/" + replayPath.length
@@ -2521,7 +2515,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         drawPadButton(c, padListBtn, 5);
         drawPadButton(c, padAutoBtn, 6);
         // REPLAY pill under the pad
-        boolean has = !wpHistory.isEmpty();
+        boolean has = !waypoints.isEmpty();
         c.drawRoundRect(padReplayBtn, dp(10f), dp(10f),
                 replayMode ? wpFillPaint : padBtnPaint);
         c.drawRoundRect(padReplayBtn, dp(10f), dp(10f),
@@ -2531,9 +2525,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         padLabelPaint.setColor(has ? 0xFFC8FFDD : 0x6693A7C4);
         String label;
         if (replayMode) {
-            label = "THOÁT REPLAY";
+            label = "THOÁT PREVIEW";
         } else {
-            label = "REPLAY  (" + wpHistory.size() + ")";
+            label = "PREVIEW  (" + waypoints.size() + ")";
         }
         c.drawText(label, padReplayBtn.centerX(), padReplayBtn.centerY() + dp(4f),
                 padLabelPaint);
