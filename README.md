@@ -177,11 +177,12 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
     biến mất **đúng lúc đầu đặt vào ô**, không “trôi qua rồi thụt lại”;
   - nước đi dự phóng **chính là nước đi tick sau dùng** (không `decide()` lần hai) nên
     hình và logic **không thể lệch** — đã đo: **0 lần lệch** trong 25 s chạy liên tục;
-  - chơi tay (waypoint/FOLLOW): **không dự phóng** vì nước rẽ do người chơi quyết định, nên
-    vẽ theo **mô hình trễ**: đầu trượt từ ô nó vừa rời vào đúng ô của nó (đuôi thụt cùng lúc) —
-    **không bao giờ vượt quá 1 ô, không giật lùi**. Khi rắn **dừng** (đang đặt waypoint, hoặc
-    xem lại route) thì `planPaused` cho `interpolation() = 1`, tức là **vẽ dứt điểm** ở đúng
-    ô thật — trước đây nó đứng nửa đường nên trông như đầu/đuôi **thụt lại 1 ô** mỗi lần dừng.
+  - chơi tay (waypoint/FOLLOW): **cũng dự phóng**, nhưng lấy từ **chính đường đi thật**
+    (`predictManualDir()`: `findPathTo()` tới waypoint kế tiếp, hoặc hướng vừa bấm) — cùng
+    hàm mà bước đi thật dùng, nên đầu vẫn **dẫn đúng ô kế** chứ không đoán mò;
+  - **khi dừng** (đang đặt waypoint / xem lại route) thì `planPaused`: `hasNext = false`
+    và `interpolation() = 1` ⇒ đầu đứng **đúng ô thật**, đuôi đứng **đúng ô đuôi**, hình
+    **dứt điểm** (trước đây đứng nửa đường nên trông như đầu/đuôi **thụt lại 1 ô**).
   Vị trí vẽ lấy từ `tickAccum / interval()` nên **không phụ thuộc fps**. Quả mới **hiện
   dần** (`foodFresh`, alpha `1.5t`). Đuôi bo tròn đúng bằng bề rộng thân.
 - **Game loop 60 fps**: render thread tự nhịp theo **lịch tuyệt đối 16.67 ms/frame**

@@ -186,8 +186,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int foodCell = -1;
     /** Current body cells, head first: the chain the renderer draws. */
     private int[] curCells = new int[0];
-    /** Body cells before the last step (manual play draws the head lagging behind). */
-    private int[] prevCells = new int[0];
     /** Manual planning pause / replay: no step is coming, so the drawing is settled. */
     private boolean planPaused;
     /** Predicted next step (unit direction) so the head can be drawn leading into it. */
@@ -1396,6 +1394,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 // Waiting for waypoints / watching the replay: nothing moves, and the
                 // drawing must not stay frozen half-way through the last step.
                 planPaused = true;
+                hasNext = false;     // no step is coming: stop leading the head
                 tickAccum = 0f;
                 updateReplay(dt);
             } else {
@@ -1545,7 +1544,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         int ni = ny * COLS + nx;
         boolean eats = ni == foodCell;
-        prevCells = cellsToArray();
         int tailBefore = body.peekLast() == null ? -1 : body.peekLast();
         if (!eats) {
             body.pollLast();
@@ -1563,7 +1561,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             spawnDeathFx(nx, ny);
             haptic(true);
             curCells = cellsToArray();
-            prevCells = curCells;
             hasNext = false;
             return;
         }
@@ -1600,9 +1597,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      */
     private void predictNext() {
         hasNext = false;
-        if (!autoMode || state != STATE_RUNNING || body.isEmpty()) {
-            // Manual play cannot know the next turn (the player decides), so it is drawn
-            // with the safe lag model instead of a guessed lead.
+        if (state != STATE_RUNNING || planPaused || body.isEmpty()) {
+            // Nothing is going to move (waiting for a waypoint / replay): the drawing
+            // stays exactly on the real cells.
             return;
         }
         Integer headObj = body.peekFirst();
@@ -1630,7 +1627,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             dx = safe[0];
             dy = safe[1];
         } else {
-            return;
+            // Manual play: predict the very move stepManualPath()/the input queue will
+            // take, so the head can be drawn leading into it without guessing.
+            int[] md = predictManualDir(head);
+            if (md == null) {
+                return;
+            }
+            dirX = md[0];
+            dirY = md[1];
+            dx = md[0];
+            dy = md[1];
         }
         int nx = head % COLS + dx;
         int ny = head / COLS + dy;
@@ -1640,6 +1646,42 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         nextDx = dx;
         nextDy = dy;
         hasNext = true;
+    }
+
+    /**
+     * The direction the next manual step will take, computed exactly the way
+     * stepManualPath() / the input queue pick it (no side effects). Null when the
+     * snake is standing still.
+     */
+    private int[] predictManualDir(int head) {
+        int hx = head % COLS;
+        int hy = head / COLS;
+        if (manualMoving && !waypoints.isEmpty()) {
+            int idx = 0;
+            while (idx < waypoints.size() && waypoints.get(idx) == head) {
+                idx++;
+            }
+            if (idx >= waypoints.size()) {
+                return null;
+            }
+            int[] path = findPathTo(cellsToArray(), waypoints.get(idx));
+            if (path == null || path.length <= 1) {
+                return null;
+            }
+            int nxt = path[1];
+            return new int[]{Integer.compare(nxt % COLS, hx),
+                    Integer.compare(nxt / COLS, hy)};
+        }
+        if (following) {
+            // FOLLOW steers by its own tail logic; predicting it exactly is not worth
+            // it, a straight guess is dropped as soon as the step differs.
+            return new int[]{dirX, dirY};
+        }
+        int[] q = dirQueue.peekFirst();
+        if (q != null && !(q[0] == -dirX && q[1] == -dirY)) {
+            return new int[]{q[0], q[1]};
+        }
+        return new int[]{dirX, dirY};
     }
 
     /**
@@ -3576,15 +3618,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      * Layout: head tip, previous head cell, ... previous cells ..., tail tip.
      */
     private void computeDrawnPoints(int n, float t) {
-        // Autoplay knows the next move, so the head leads into that cell with the body
-        // following. Manual play cannot know the next turn, so it falls back to the lag
-        // model: the head glides from the cell it just left into its own cell.
-        boolean lead = autoMode && hasNext;
-        int[] chain = lead ? curCells : prevCells;
+        // One model everywhere: the chain is the CURRENT body and the head is drawn
+        // gliding into the next cell the logic will take (hasNext). At t=0 that is
+        // exactly the real body, at t=1 exactly the next body - so the snake never
+        // lags behind and never jumps back when a step starts.
+        int[] chain = curCells;
         int m = chain.length;
-        int realHead = curCells.length > 0 ? curCells[0]
+        int headCell = m > 0 ? chain[0]
                 : (body.peekFirst() == null ? 0 : body.peekFirst());
-        int headCell = m > 0 ? chain[0] : realHead;
+        int realHead = headCell;
         if (m == 0) {
             if (drawnPts.length < 2) {
                 drawnPts = new float[2];
@@ -3602,7 +3644,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         // The head slides from its real cell into the next one the logic will take,
         // while the body follows behind it (the cell it is leaving becomes the neck).
         // At t=1 the drawn chain is exactly the next body, so nothing ever snaps.
-        int leadCell = lead ? (headCell + nextDy * COLS + nextDx) : realHead;
+        int leadCell = hasNext ? (headCell + nextDy * COLS + nextDx) : realHead;
         float hx = cellPx(headCell);
         float hy = cellPy(headCell);
         drawnPts[0] = hx + (cellPx(leadCell) - hx) * t;
@@ -3616,9 +3658,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         // The tail retires in the same tick, unless the coming step eats the apple (the
         // body grows, so the tail stays put for that tick).
-        // Eating freezes the tail for that tick (the body grows instead of retiring).
-        boolean tailFreeze = lead ? (leadCell == foodCell)
-                : (prevCells.length + 1 == curCells.length);
+        // The tail retires only while a step is actually going to happen; eating freezes
+        // it for that tick (the body grows instead of retiring).
+        boolean tailFreeze = !hasNext || leadCell == foodCell;
         if (!tailFreeze && m >= 2) {
             float tx = cellPx(chain[m - 1]);
             float ty = cellPy(chain[m - 1]);
