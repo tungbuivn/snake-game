@@ -180,6 +180,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private int mode = MODE_MANUAL;
     private boolean autoMode;
+    /** Auto mode the player left when taking manual control (for resume). */
+    private int lastAutoMode = -1;
     private AutoPilot pilot;
     private AutoPilot mangoPilot;
     private PathPilot pathPilot;
@@ -1133,6 +1135,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (state == STATE_READY || state == STATE_DEAD || state == STATE_WON) {
             mode = newMode;
             autoMode = newMode != MODE_MANUAL;
+            lastAutoMode = autoMode ? newMode : -1;
             clearRoute();
             if (newMode == MODE_MANGO && mangoPilot != null) {
                 // MangoSnake style: every run gets a fresh random cycle.
@@ -1153,6 +1156,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private void restartGame(int newMode) {
         mode = newMode;
         autoMode = newMode != MODE_MANUAL;
+        lastAutoMode = autoMode ? newMode : -1;
         if (newMode == MODE_MANGO && mangoPilot != null) {
             mangoPilot.reshuffleCycle();
         }
@@ -1178,6 +1182,30 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             state = STATE_RUNNING;
             tickAccum = Math.min(tickAccum, 0f);
         }
+    }
+
+    /**
+     * Pause-menu mode button: continue the current run with that AI. If the mode
+     * is already active it simply resumes; if the player took over by hand the AI
+     * of that mode is switched back on for the same run. Another mode restarts.
+     */
+    private void resumeMode(int targetMode) {
+        if (mode == targetMode && autoMode) {
+            resumeGame();
+            return;
+        }
+        if (lastAutoMode == targetMode || mode == targetMode) {
+            mode = targetMode;
+            autoMode = true;
+            manualMoving = false;
+            following = false;
+            followPicking = false;
+            dirQueue.clear();
+            resumeGame();
+            haptic(false);
+            return;
+        }
+        restartGame(targetMode);
     }
 
     private void update(float dt) {
@@ -2364,26 +2392,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 }
                 return;
             case STATE_PAUSED:
-                // Tapping the mode you are already playing resumes that run;
-                // another mode starts the run again in that mode.
+                // The mode button resumes the run: same active mode -> keep going,
+                // and if the player had taken over by hand the AI of that mode
+                // simply switches back on for the same run.
                 if (autoResumeBtn.contains(x, y)) {
-                    if (mode == MODE_AUTOWIN && autoMode) {
-                        resumeGame();
-                    } else {
-                        restartGame(MODE_AUTOWIN);
-                    }
+                    resumeMode(MODE_AUTOWIN);
                 } else if (pathResumeBtn.contains(x, y)) {
-                    if (mode == MODE_SHORTPATH && autoMode) {
-                        resumeGame();
-                    } else {
-                        restartGame(MODE_SHORTPATH);
-                    }
+                    resumeMode(MODE_SHORTPATH);
                 } else if (mangoResumeBtn.contains(x, y)) {
-                    if (mode == MODE_MANGO && autoMode) {
-                        resumeGame();
-                    } else {
-                        restartGame(MODE_MANGO);
-                    }
+                    resumeMode(MODE_MANGO);
                 } else {
                     resumeGame();
                 }
@@ -2399,6 +2416,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 }
                 if (autoMode && autoBadge.contains(x, y)) {
                     // Taking over the AI: stop and let the player plan a route.
+                    lastAutoMode = mode;
                     mode = MODE_MANUAL;
                     autoMode = false;
                     clearRoute();
@@ -2420,6 +2438,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         if (autoMode) {
             // A swipe means the player takes over from the AI.
+            lastAutoMode = mode;
             autoMode = false;
             mode = MODE_MANUAL;
             dirQueue.clear();
