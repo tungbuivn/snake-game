@@ -135,6 +135,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private float listRowH = 0f;
     private final RectF listPanel = new RectF();
     private final RectF listCloseBtn = new RectF();
+
+    /* --- replay playback (like a video player) ------------------------- */
+    private boolean replayMode;
+    private int[] replayPath = new int[0];
+    private int replayPos;
+    private float replayAccum;
+    private static final float REPLAY_STEP_MS = 55f;
     private final RectF autoBadge = new RectF();
     private final RectF tmpRect = new RectF();
     private float pauseCx;
@@ -247,6 +254,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private Paint listTitlePaint;
     private Paint listCardPaint;
     private Paint listCardStroke;
+    private Paint replayBodyPaint;
+    private Paint replayHeadPaint;
+    private Paint replayLabelPaint;
     private Paint ghostBodyPaint;
     private Paint ghostHeadPaint;
 
@@ -559,6 +569,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         listCardStroke.setStyle(Paint.Style.STROKE);
         listCardStroke.setStrokeWidth(dp(1.4f));
         listCardStroke.setColor(0xFF35507F);
+
+        // Replay playback: translucent cyan snake walking the recorded route.
+        replayBodyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        replayBodyPaint.setStyle(Paint.Style.STROKE);
+        replayBodyPaint.setColor(0xB37FE7FF);
+        replayBodyPaint.setStrokeCap(Paint.Cap.ROUND);
+        replayBodyPaint.setStrokeJoin(Paint.Join.ROUND);
+        replayHeadPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        replayHeadPaint.setColor(0xE67FE7FF);
+        replayLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        replayLabelPaint.setTypeface(bold);
+        replayLabelPaint.setTextSize(dp(10f));
+        replayLabelPaint.setColor(0xFFBFF4FF);
+        replayLabelPaint.setTextAlign(Paint.Align.CENTER);
 
         // Faint orange ghost of the whole snake at the selected waypoint, so the
         // player can see where the head and the tail would be.
@@ -1152,10 +1176,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         dumpState();
 
         if (state == STATE_RUNNING) {
-            boolean planPause = !autoMode && mode == MODE_MANUAL && !manualMoving;
+            boolean planPause = replayMode
+                    || (!autoMode && mode == MODE_MANUAL && !manualMoving);
             if (planPause) {
-                // Waiting for waypoints: the snake stands still.
+                // Waiting for waypoints / watching the replay: nothing moves.
                 tickAccum = 0f;
+                updateReplay(dt);
             } else {
                 foodTimer += dt;
                 // "Teleport" catch-up: once a fruit is overdue for more than 2s
@@ -1464,6 +1490,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     /** Manual mode taps: waypoints, the arrow pad and the MOVE button. */
     private void handleManualTap(float x, float y) {
+        if (replayMode) {
+            // Any tap leaves the playback; the REPLAY button toggles it off too.
+            if (!padReplayBtn.contains(x, y)) {
+                stopReplay();
+            } else {
+                replayRoute();
+            }
+            return;
+        }
         if (moveBtn.contains(x, y)) {
             if (manualMoving) {
                 manualMoving = false;
@@ -1743,21 +1778,102 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     /**
-     * REPLAY: restores the whole waypoint history as the route and starts moving,
-     * so the run of every waypoint placed so far is replayed.
+     * REPLAY: plays the recorded waypoint route like a video (the real snake does
+     * not move). Tapping the button again - or anywhere else - leaves the playback
+     * and the player continues from the same position.
      */
     private void replayRoute() {
-        if (wpHistory.isEmpty()) {
+        if (replayMode) {
+            stopReplay();
+            return;
+        }
+        if (wpHistory.isEmpty() || body.isEmpty()) {
             haptic(true);
             return;
         }
-        waypoints.clear();
-        waypoints.addAll(wpHistory);
-        selectedWp = waypoints.isEmpty() ? -1 : waypoints.size() - 1;
-        manualMoving = true;
-        tickAccum = -120f;
-        dirQueue.clear();
+        ArrayList<Integer> cells = new ArrayList<>();
+        int cur = body.peekFirst();
+        cells.add(cur);
+        for (int wp : wpHistory) {
+            int cx = cur % COLS;
+            int cy = cur / COLS;
+            int tx = wp % COLS;
+            int ty = wp / COLS;
+            while (cx != tx) {
+                cx += Integer.compare(tx, cx);
+                cells.add(cy * COLS + cx);
+            }
+            while (cy != ty) {
+                cy += Integer.compare(ty, cy);
+                cells.add(cy * COLS + cx);
+            }
+            cur = wp;
+        }
+        replayPath = new int[cells.size()];
+        for (int i = 0; i < cells.size(); i++) {
+            replayPath[i] = cells.get(i);
+        }
+        replayPos = 0;
+        replayAccum = 0f;
+        replayMode = true;
+        manualMoving = false;
+        tickAccum = 0f;
+        wpListOpen = false;
         haptic(false);
+    }
+
+    private void stopReplay() {
+        replayMode = false;
+        replayAccum = 0f;
+        replayPath = new int[0];
+        replayPos = 0;
+        tickAccum = 0f;
+        haptic(false);
+    }
+
+    /** Advances the playback (called from update while replaying). */
+    private void updateReplay(float dt) {
+        if (!replayMode) {
+            return;
+        }
+        replayAccum += dt * 1000f;
+        while (replayAccum >= REPLAY_STEP_MS && replayPos < replayPath.length - 1) {
+            replayAccum -= REPLAY_STEP_MS;
+            replayPos++;
+        }
+    }
+
+    /** Translucent snake walking the recorded route (its head is at replayPos). */
+    private void drawReplaySnake(Canvas c) {
+        if (!replayMode || replayPath.length == 0) {
+            return;
+        }
+        int len = Math.min(body.size(), replayPos + 1);
+        int from = replayPos - len + 1;
+        if (len < 2) {
+            from = replayPos;
+            len = 1;
+        }
+        float half = cell / 2f;
+        replayBodyPaint.setStrokeWidth(cell * 0.60f);
+        Path gp = new Path();
+        for (int i = from; i <= replayPos; i++) {
+            int rc = replayPath[i];
+            float px = boardLeft + (rc % COLS) * cell + half;
+            float py = boardTop + (rc / COLS) * cell + half;
+            if (i == from) {
+                gp.moveTo(px, py);
+            } else {
+                gp.lineTo(px, py);
+            }
+        }
+        c.drawPath(gp, replayBodyPaint);
+        int headCell = replayPath[replayPos];
+        c.drawCircle(boardLeft + (headCell % COLS) * cell + half,
+                boardTop + (headCell / COLS) * cell + half, cell * 0.40f, replayHeadPaint);
+        c.drawText("REPLAY " + replayPos + " / " + (replayPath.length - 1),
+                boardLeft + (headCell % COLS) * cell + half,
+                boardTop + (headCell / COLS) * cell - cell * 0.62f, replayLabelPaint);
     }
 
     /** BFS shortest path (cells) from the head to {@code target}, body = wall. */
@@ -1826,6 +1942,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         wpListOpen = false;
         listDragIndex = -1;
         listDragging = false;
+        replayMode = false;
+        replayPath = new int[0];
+        replayPos = 0;
+        replayAccum = 0f;
     }
 
     private void spawnFood() {
@@ -2019,6 +2139,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + Math.round(padReplayBtn.centerY())
                     + " hist=" + wpHistory.size()
                     + " list=" + (wpListOpen ? 1 : 0)
+                    + " replay=" + (replayMode ? 1 : 0) + "/" + replayPos
+                    + "/" + replayPath.length
                     + " listRect=" + Math.round(listPanel.left) + ","
                     + Math.round(listPanel.top) + ","
                     + Math.round(listPanel.right) + ","
@@ -2240,7 +2362,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         // The ghost is drawn on top of the real snake: with a short route the
         // ghost shares cells with the body and would otherwise be hidden.
         if (!autoMode && mode == MODE_MANUAL && state == STATE_RUNNING) {
-            drawGhostSnake(c);
+            if (replayMode) {
+                drawReplaySnake(c);
+            } else {
+                drawGhostSnake(c);
+            }
             drawWaypointMarkers(c);
         }
         drawParticles(c);
@@ -2396,13 +2522,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         drawPadButton(c, padAutoBtn, 6);
         // REPLAY pill under the pad
         boolean has = !wpHistory.isEmpty();
-        c.drawRoundRect(padReplayBtn, dp(10f), dp(10f), padBtnPaint);
-        c.drawRoundRect(padReplayBtn, dp(10f), dp(10f), padBtnStrokePaint);
+        c.drawRoundRect(padReplayBtn, dp(10f), dp(10f),
+                replayMode ? wpFillPaint : padBtnPaint);
+        c.drawRoundRect(padReplayBtn, dp(10f), dp(10f),
+                replayMode ? replayHeadPaint : padBtnStrokePaint);
         float old = padLabelPaint.getTextSize();
         padLabelPaint.setTextSize(dp(11f));
         padLabelPaint.setColor(has ? 0xFFC8FFDD : 0x6693A7C4);
-        c.drawText("REPLAY  (" + wpHistory.size() + ")",
-                padReplayBtn.centerX(), padReplayBtn.centerY() + dp(4f), padLabelPaint);
+        String label;
+        if (replayMode) {
+            label = "THOÁT REPLAY";
+        } else {
+            label = "REPLAY  (" + wpHistory.size() + ")";
+        }
+        c.drawText(label, padReplayBtn.centerX(), padReplayBtn.centerY() + dp(4f),
+                padLabelPaint);
         padLabelPaint.setTextSize(old);
         padLabelPaint.setColor(0xE6C8FFDD);
     }
