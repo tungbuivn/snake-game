@@ -1404,6 +1404,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 // drawing must not stay frozen half-way through the last step.
                 planPaused = true;
                 hasNext = false;     // no step is coming: stop leading the head
+                aimStoppedHead();
                 tickAccum = 0f;
                 updateReplay(dt);
             } else {
@@ -1661,6 +1662,27 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         headAngleTo = wrap180((float) Math.toDegrees(Math.atan2(dy, dx)));
     }
 
+    /**
+     * While the snake waits for the player, keep the capsule facing the direction the
+     * route will take, without moving anything else.
+     */
+    private void aimStoppedHead() {
+        if (body.isEmpty()) {
+            return;
+        }
+        Integer headObj = body.peekFirst();
+        if (headObj == null) {
+            return;
+        }
+        int[] md = predictManualDir(headObj);
+        if (md == null) {
+            return;
+        }
+        dirX = md[0];
+        dirY = md[1];
+        headAngleTo = wrap180((float) Math.toDegrees(Math.atan2(md[1], md[0])));
+        headAngleFrom = headAngleTo;
+    }
     /**
      * The direction the next manual step will take, computed exactly the way
      * stepManualPath() / the input queue pick it (no side effects). Null when the
@@ -2014,6 +2036,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 manualMoving = true;
                 tickAccum = -120f;
                 dirQueue.clear();
+                // A step is coming again: re-enable the lead + the turn ramp right away,
+                // otherwise the first tick would move the head while it still points the
+                // old way and the capsule would flip only afterwards.
+                planPaused = false;
+                predictNext();
             }
             return;
         }
@@ -3735,7 +3762,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         while (angleDelta < -180f) {
             angleDelta += 360f;
         }
-        headAngleDeg = wrap180(headAngleFrom + angleDelta * t);
+        // Turning is tied to the cell move; with no move in progress the capsule keeps
+        // its target angle. (Before, a settled stop left t=1 and starting the run reset
+        // t to 0, so the head visibly turned and then turned back.)
+        headAngleDeg = hasNext ? wrap180(headAngleFrom + angleDelta * t)
+                : wrap180(headAngleTo);
 
         computeDrawnPoints(n, t);
 

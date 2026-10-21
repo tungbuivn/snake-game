@@ -189,7 +189,10 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
   ngắn nhất (`wrap180`) nên không bao giờ quay vòng 270°. Quay 90° mất **đúng 1 tick**
   (120 ms ở 0.5×, 60 ms ở 1×, 20 ms ở 3×) và **không phụ thuộc khung hình**: máy 30 fps
   hay 120 fps đều thấy cùng một tốc độ quay. Dump có `ang=`/`dir=`: bắt được giá trị đang
-  quay, ví dụ `dir=1,0` mà `ang=58` hay `ang=12` (đang từ 90° về 0°).
+  quay, ví dụ `dir=1,0` mà `ang=58` hay `ang=12` (đang từ 90° về 0°). **Khi dừng** (đang đặt
+  waypoint) thì `aimStoppedHead()` cho đầu **hướng sẵn theo nước đi đầu tiên của route**, và
+  bấm `MOVE` **không làm góc đổi** nữa (trước đây `t` bị đặt lại 0 nên đầu quay một góc rồi
+  quay ngược lại).
   Vị trí vẽ lấy từ `tickAccum / interval()` nên **không phụ thuộc fps**. Quả mới **hiện
   dần** (`foodFresh`, alpha `1.5t`). Đuôi bo tròn đúng bằng bề rộng thân.
 - **Game loop 60 fps**: render thread tự nhịp theo **lịch tuyệt đối 16.67 ms/frame**
