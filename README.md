@@ -29,6 +29,10 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      luôn thấy được **đầu và đuôi** sẽ ở đâu để đặt waypoint tiếp theo.
      Waypoint **được phép nằm trên thân rắn hiện tại** (khi rắn bò tới thì đuôi đã đi
      qua, ô đó thường đã trống).
+     Nút **`FOLLOW`** (ô dưới-trái cụm phím): rắn **tự tìm đường bám theo đuôi** của mình;
+     bấm 1 lần rồi chạm lên **một đốt trên thân** để chọn **điểm dừng** — rắn bám đuôi tới
+     khi đầu tới đúng điểm đó thì dừng (bấm lần nữa để chạy bám đuôi không điểm dừng, hoặc
+     bấm `STOP` để dừng tay).
   2. `AUTO WIN` — **một** chu trình Hamilton **cố định** phủ toàn board (boustrophedon),
      luôn thắng, 0 chết.
   3. `SHORT PATH` — **ăn quả nhưng phải còn đường bám đuôi**:
@@ -152,6 +156,7 @@ muốn phát hành chính thức trên Play Store thì thay keystore riêng).
 | `AUTO` (giữa 4 mũi tên) | **Tự đặt waypoint**: lấy đường ngắn nhất đầu→quả (BFS, thân là tường) và chỉ giữ các **điểm gấp khúc** + quả, nên route chữ L giữa 2 waypoint đúng bằng đường ngắn nhất |
 | `LIST` (đối xứng với `✕`) | Mở **hộp thoại danh sách waypoint**: mỗi dòng ghi số thứ tự + toạ độ ô; **kéo-thả dòng** để đổi thứ tự (thả tới đâu là chèn tới đó), chạm 1 dòng để chọn nó, chạm ra ngoài hoặc `✕` để đóng |
 | `PREVIEW (n)` (dưới cụm phím) | **Playback route hiện tại như video**: rắn thật **đứng yên**, một bóng rắn **xanh cyan** bò lại đúng các waypoint **đang có** (không lưu lịch sử cũ), có nhãn `PREVIEW i / n`; nút đổi thành **`THOÁT PREVIEW`** — bấm lần nữa hoặc chạm bất kỳ đâu là thoát và **chơi tiếp** đúng chỗ đang đứng |
+| `FOLLOW` (ô dưới-trái của cụm phím) | **Bám đuôi**: bấm 1 lần → *chờ chọn điểm* (chạm lên **một đốt trên thân rắn** để đặt điểm dừng); bấm lần nữa → chạy bám đuôi luôn. Rắn tự tìm đường (BFS) **chạy theo đuôi** (đuôi luôn di chuyển nên an toàn), dừng khi **đầu tới đúng điểm đã chọn**. Nút đổi thành **`STOP`** khi đang chạy để dừng tay |
 | `MOVE` / `DỪNG` (thanh dưới) | Cho rắn chạy theo route / dừng lại để sửa |
 | Vuốt 4 hướng (chế độ AI) | Chuyển sang tự điều khiển (rắn đứng chờ waypoint) |
 | Chạm `CHƠI` / `AUTO WIN` / `SHORT PATH` / `MANGO` | Bắt đầu chế độ tương ứng (4 nút xếp dọc) |
@@ -159,8 +164,8 @@ muốn phát hành chính thức trên Play Store thì thay keystore riêng).
 | Chạm khi thua | Chơi lại; menu 2×2 có `CHƠI LẠI` · `AUTO WIN` / `SHORT PATH` · `MANGO` |
 
 Cụm phím chỉnh waypoint nằm trong **dải điều khiển dưới grid** (không đè lên bàn chơi):
-`[[LIST] [▲] [✕]] / [[◀] [AUTO] [▶]] / [[▼]]` + nút `PREVIEW (n)` bên dưới, còn `MOVE`
-và nút tạm dừng ở bên phải dải này; dòng gợi ý + `Chết: N` ở trên cùng của dải.
+`[[LIST] [▲] [✕]] / [[◀] [AUTO] [▶]] / [[FOLLOW] [▼]]` + nút `PREVIEW (n)` bên dưới,
+còn `MOVE` và nút tạm dừng ở bên phải dải này; dòng gợi ý + `Chết: N` ở trên cùng của dải.
 
 HUD hiện `ĐIỂM`, `KỶ LỤC`, badge tên chế độ AI, và thanh dưới có `Chết: N` — mỗi lần
 **cắn vào thân** (bị cắt đuôi) hay **đâm tường** đều +1 và đổi màu rắn.

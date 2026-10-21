@@ -123,7 +123,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private final RectF padAutoBtn = new RectF();
     private final RectF padListBtn = new RectF();
     private final RectF padReplayBtn = new RectF();
+    private final RectF padFollowBtn = new RectF();
     private final RectF padPanel = new RectF();
+
+    /* --- manual FOLLOW: walk along the body / follow the tail ---------- */
+    private boolean followPicking;
+    private boolean following;
+    private int followStop = -1;
 
     /* --- drag & drop waypoint list dialog ------------------------------ */
     private boolean wpListOpen;
@@ -793,6 +799,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         padAutoBtn.set(padL + pb + pg, padT + pb + pg,
                 padL + pb * 2f + pg, padT + pb * 2f + pg);
         padListBtn.set(padL, padT, padL + pb, padT + pb);
+        // FOLLOW lives in the bottom-left cell of the pad.
+        padFollowBtn.set(padL, padT + 2f * (pb + pg), padL + pb,
+                padT + 3f * pb + 2f * pg);
         // PREVIEW sits under the pad, still inside the control strip.
         float replayTop = padT + padH + dp(8f);
         padReplayBtn.set(padL, replayTop, padL + padW, replayTop + replayH);
@@ -1178,7 +1187,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         if (state == STATE_RUNNING) {
             boolean planPause = replayMode
-                    || (!autoMode && mode == MODE_MANUAL && !manualMoving);
+                    || (!autoMode && mode == MODE_MANUAL && !manualMoving && !following);
             if (planPause) {
                 // Waiting for waypoints / watching the replay: nothing moves.
                 tickAccum = 0f;
@@ -1236,9 +1245,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void step() {
-        if (!autoMode && mode == MODE_MANUAL && !stepManualPath()) {
-            // No route (or route finished): the snake waits for the player.
-            return;
+        if (!autoMode && mode == MODE_MANUAL) {
+            boolean moved = following ? stepFollow() : stepManualPath();
+            if (!moved) {
+                // No route / following finished: the snake waits for the player.
+                return;
+            }
         }
         if (autoMode) {
             dirQueue.clear();
@@ -1421,6 +1433,51 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      * Walks the planned route. Returns false when the snake must not move (no
      * waypoints left or movement not started), so the player can keep editing.
      */
+    /**
+     * FOLLOW: walk a path towards the snake's own tail (the tail keeps moving,
+     * so this is always safe). Stops when the head reaches the body point the
+     * player picked, when the tail cannot be reached any more, or on request.
+     */
+    private boolean stepFollow() {
+        Integer headObj = body.peekFirst();
+        if (headObj == null || body.size() < 2) {
+            following = false;
+            return false;
+        }
+        int head = headObj;
+        if (followStop >= 0 && head == followStop) {
+            following = false;
+            followStop = -1;
+            tickAccum = 0f;
+            haptic(true);
+            return false;
+        }
+        int tail = body.peekLast();
+        // While the picked point is still covered by the body, walk after the
+        // tail; once it frees up, steer straight to it and stop there.
+        int target = tail;
+        if (followStop >= 0 && followStop != tail && !body.contains(followStop)) {
+            target = followStop;
+        }
+        int[] path = findPathTo(cellsToArray(), target);
+        if (path == null || path.length < 2) {
+            following = false;
+            tickAccum = 0f;
+            return false;
+        }
+        int hx = head % COLS;
+        int hy = head / COLS;
+        // path[0] is the head itself, path[1] is the first step.
+        int next = path[1];
+        dirX = (next % COLS) - hx;
+        dirY = (next / COLS) - hy;
+        if (Math.abs(dirX) + Math.abs(dirY) != 1) {
+            following = false;
+            return false;
+        }
+        return true;
+    }
+
     private boolean stepManualPath() {
         if (!manualMoving || waypoints.isEmpty()) {
             return false;
@@ -1540,6 +1597,25 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             replayRoute();
             return;
         }
+        // FOLLOW: pick a body cell to stop at, then run along the tail.
+        if (padFollowBtn.contains(x, y)) {
+            if (following) {
+                following = false;
+                followPicking = false;
+                followStop = -1;
+            } else if (followPicking) {
+                following = true;
+                followPicking = false;
+                followStop = -1;
+                manualMoving = false;
+                tickAccum = -120f;
+            } else {
+                followPicking = true;
+                followStop = -1;
+            }
+            haptic(false);
+            return;
+        }
         if (selectedWp >= 0 && selectedWp < waypoints.size()) {
             if (padUpBtn.contains(x, y)) {
                 moveWaypoint(-1, 0);
@@ -1564,6 +1640,18 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         int c = cellAt(x, y);
         if (c < 0) {
+            return;
+        }
+        // FOLLOW: tapping a body cell chooses (or moves) the stop point.
+        if (followPicking || following) {
+            if (body.contains(c)) {
+                followStop = c;
+                following = true;
+                followPicking = false;
+                manualMoving = false;
+                tickAccum = -120f;
+                haptic(false);
+            }
             return;
         }
         for (int i = 0; i < waypoints.size(); i++) {
@@ -1951,6 +2039,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         replayPath = new int[0];
         replayPos = 0;
         replayAccum = 0f;
+        following = false;
+        followPicking = false;
+        followStop = -1;
     }
 
     private void spawnFood() {
@@ -2143,6 +2234,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + " padReplay=" + Math.round(padReplayBtn.centerX()) + ","
                     + Math.round(padReplayBtn.centerY())
                     + " list=" + (wpListOpen ? 1 : 0)
+                    + " follow=" + (following ? 1 : 0) + "/" + (followPicking ? 1 : 0)
+                    + "/" + followStop
                     + " replay=" + (replayMode ? 1 : 0) + "/" + replayPos
                     + "/" + replayPath.length
                     + " listRect=" + Math.round(listPanel.left) + ","
@@ -2412,11 +2505,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     /** Waypoint dots with their order numbers (drawn on top of the snake/ghost). */
     private void drawWaypointMarkers(Canvas c) {
+        if (waypoints.isEmpty() && followStop < 0) {
+            return;
+        }
+        float half = cell / 2f;
+        if (followStop >= 0) {
+            // Stop point chosen for FOLLOW.
+            float fx = boardLeft + (followStop % COLS) * cell + half;
+            float fy = boardTop + (followStop / COLS) * cell + half;
+            c.drawCircle(fx, fy, cell * 0.34f, wpSelPaint);
+        }
         if (waypoints.isEmpty()) {
             return;
         }
         boolean[] broken = brokenWaypoints();
-        float half = cell / 2f;
         for (int i = 0; i < waypoints.size(); i++) {
             int wp = waypoints.get(i);
             float tx = boardLeft + (wp % COLS) * cell + half;
@@ -2576,6 +2678,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private void drawWaypointPad(Canvas c) {
         // The strip background is painted by drawBottomBar (before the hint,
         // MOVE and pause button) so those stay on top of it.
+        // FOLLOW (bottom-left cell): pick a body point to stop at, then walk
+        // along the tail.
+        boolean followOn = following || followPicking;
+        c.drawRoundRect(padFollowBtn, dp(12f), dp(12f),
+                followOn ? wpFillPaint : padBtnPaint);
+        c.drawRoundRect(padFollowBtn, dp(12f), dp(12f), padBtnStrokePaint);
+        float oldSize = padLabelPaint.getTextSize();
+        padLabelPaint.setTextSize(dp(9f));
+        padLabelPaint.setColor(followOn ? 0xFFFFD479 : 0xFFC8FFDD);
+        c.drawText(following ? "STOP" : "FOLLOW",
+                padFollowBtn.centerX(), padFollowBtn.centerY() + dp(3.2f), padLabelPaint);
+        padLabelPaint.setTextSize(oldSize);
+        padLabelPaint.setColor(0xE6C8FFDD);
         if (selectedWp >= 0 && selectedWp < waypoints.size()) {
             drawPadButton(c, padUpBtn, 0);
             drawPadButton(c, padDownBtn, 1);
@@ -2972,7 +3087,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (autoMode) {
             hint = "AI đang chơi — chạm badge để tự điều khiển";
         } else if (mode == MODE_MANUAL) {
-            if (manualMoving) {
+            if (following) {
+                hint = followStop >= 0
+                        ? "FOLLOW: bám đuôi, dừng ở điểm đã chọn"
+                        : "FOLLOW: đang bám đuôi";
+            } else if (followPicking) {
+                hint = "Chạm lên thân rắn để chọn điểm dừng";
+            } else if (manualMoving) {
                 hint = "Bấm DỪNG để sửa route";
             } else if (waypoints.isEmpty()) {
                 hint = "Chạm board đặt waypoint";
@@ -2980,7 +3101,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 hint = "Bấm MOVE để chạy";
             }
             broken = brokenLabel();
-            if (broken.length() > 0) {
+            if (broken.length() > 0 && !following && !followPicking) {
                 hint = "BROKEN tại #" + broken + "  •  đổi thứ tự waypoint";
             }
         } else {
