@@ -25,6 +25,12 @@ final class PathPilot {
     /** Longest fruit route that is accepted; it is validated step by step. */
     private static final int MAX_PLAN = 300;
 
+    /** After this many ticks without a safe plan the checks are relaxed. */
+    private static final int RELAX_AFTER = 120;
+
+    /** After this many ticks the fruit route is taken no matter what. */
+    private static final int FORCE_AFTER = 420;
+
     private final int cols;
     private final int rows;
     private final int total;
@@ -34,6 +40,7 @@ final class PathPilot {
     private final int[] queue;
     private boolean[] scratch;
     private int lastSteps = -1;
+    private int stuckTicks;
     private String lastBranch = "";
 
     String lastBranch() {
@@ -53,6 +60,11 @@ final class PathPilot {
 
     int getStepsToFood() {
         return lastSteps;
+    }
+
+    /** Ticks spent without an accepted fruit plan (diagnostics). */
+    int stuckTicks() {
+        return stuckTicks;
     }
 
     int[] decide(int[] body, int food, int dirX, int dirY) {
@@ -75,12 +87,34 @@ final class PathPilot {
             boolean ok = routeSafe(body, toFood, food, MAX_PLAN)
                     && tailReachable(simulateEat(body, toFood, food));
             if (ok) {
+                stuckTicks = 0;
                 lastBranch = "food-bfs";
                 return dirTo(head, toFood[0]);
             }
         } else if (toFood.length > 0) {
+            stuckTicks = 0;
             lastBranch = "food-tiny";
             return dirTo(head, toFood[0]);
+        }
+
+        // 2b. No plan survives the strict checks. If that keeps happening the
+        //     snake would circle behind its tail for ever (infinite loop), so
+        //     relax: accept the fruit route as soon as its FIRST step keeps the
+        //     tail reachable, and after a longer stall accept it anyway so the
+        //     run always makes progress.
+        if (toFood.length > 0) {
+            stuckTicks++;
+            if (stuckTicks > RELAX_AFTER) {
+                int[] step = moveVirtual(body, toFood[0], toFood[0] == food);
+                if (tailReachable(step) || stuckTicks > FORCE_AFTER) {
+                    stuckTicks = 0;
+                    lastBranch = "food-relaxed";
+                    markBody(body);
+                    return dirTo(head, toFood[0]);
+                }
+            }
+        } else {
+            stuckTicks++;
         }
 
         // 3. same plan, but along the expanded (winding) route
@@ -90,6 +124,7 @@ final class PathPilot {
             boolean ok = routeSafe(body, longFood, food, MAX_PLAN)
                     && tailReachable(simulateEat(body, longFood, food));
             if (ok) {
+                stuckTicks = 0;
                 lastBranch = "food-long";
                 return dirTo(head, longFood[0]);
             }
@@ -326,6 +361,106 @@ final class PathPilot {
         }
         markBody(body);
         return wander(body[0]);
+    }
+
+    /**
+     * True when the head can walk to {@code food} through free cells. Used to keep
+     * the fruit eatable: a fruit that the snake has sealed off is an endless loop.
+     */
+    boolean foodReachable(int[] body, int food) {
+        if (body == null || body.length == 0 || food < 0) {
+            return false;
+        }
+        markBody(body);
+        return bfs(body[0], food).length > 0;
+    }
+
+    /**
+     * Nearest free cell to the head (at least two steps away), or -1 when the head
+     * is fully walled in. Used to bring a fruit the snake keeps circling into reach.
+     */
+    int nearestFreeCell(int[] body) {
+        if (body == null || body.length == 0) {
+            return -1;
+        }
+        markBody(body);
+        int head = body[0];
+        Arrays.fill(dist, -1);
+        int qh = 0;
+        int qt = 0;
+        queue[qt++] = head;
+        dist[head] = 0;
+        int best = -1;
+        while (qh < qt) {
+            int cur = queue[qh++];
+            int cx = cur % cols;
+            int cy = cur / cols;
+            for (int k = 0; k < 4; k++) {
+                int nx = cx + DIRS[k][0];
+                int ny = cy + DIRS[k][1];
+                if (!inside(nx, ny)) {
+                    continue;
+                }
+                int n = ny * cols + nx;
+                if (dist[n] >= 0 || blocked[n]) {
+                    continue;
+                }
+                dist[n] = dist[cur] + 1;
+                queue[qt++] = n;
+                if (best < 0 && dist[n] >= 2) {
+                    best = n;
+                }
+            }
+        }
+        return best;
+    }
+
+    /**
+     * A free cell the head can really walk to. Used when a fruit ends up sealed
+     * behind the snake's own body: without a path the run would circle for ever.
+     * Farther cells are preferred (the fruit should not pop up under the nose),
+     * and the choice inside that pool is random so it does not look scripted.
+     */
+    int reachableFreeCell(int[] body, java.util.Random rnd) {
+        if (body == null || body.length == 0) {
+            return -1;
+        }
+        markBody(body);
+        int head = body[0];
+        Arrays.fill(dist, -1);
+        int qh = 0;
+        int qt = 0;
+        queue[qt++] = head;
+        dist[head] = 0;
+        int[] pool = new int[total];
+        int poolN = 0;
+        int farthest = -1;
+        while (qh < qt) {
+            int cur = queue[qh++];
+            int cx = cur % cols;
+            int cy = cur / cols;
+            for (int k = 0; k < 4; k++) {
+                int nx = cx + DIRS[k][0];
+                int ny = cy + DIRS[k][1];
+                if (!inside(nx, ny)) {
+                    continue;
+                }
+                int n = ny * cols + nx;
+                if (dist[n] >= 0 || blocked[n]) {
+                    continue;
+                }
+                dist[n] = dist[cur] + 1;
+                queue[qt++] = n;
+                farthest = n;
+                if (dist[n] >= 3) {
+                    pool[poolN++] = n;
+                }
+            }
+        }
+        if (poolN > 0) {
+            return pool[rnd.nextInt(poolN)];
+        }
+        return farthest;
     }
 
     /** Two-cell lookahead first, then any free neighbour. */

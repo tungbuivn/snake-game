@@ -770,21 +770,18 @@ final class AutoPilot {
         if (tailDist == 0) {
             tailDist = total;
         }
-        int count = 0;
-        for (int d = 1; d < tailDist; d++) {
-            int c = cycleCell[(hIdx + d) % total];
-            if (!blocked[c]) {
-                count++;
-            }
+        // Prefer the near stretch of the free arc. The snake walks at a steady
+        // speed now, so a fruit sitting at the far end of a long arc would take
+        // half a minute - it would look like the run had stalled.
+        int window = Math.max(1, Math.min(tailDist - 1,
+                Math.max(40, Math.min(160, tailDist / 2))));
+        int near = pickInArc(hIdx, 1, window, rnd);
+        if (near >= 0) {
+            return near;
         }
-        if (count > 0) {
-            int pick = rnd.nextInt(count);
-            for (int d = 1; d < tailDist; d++) {
-                int c = cycleCell[(hIdx + d) % total];
-                if (!blocked[c] && pick-- == 0) {
-                    return c;
-                }
-            }
+        int any = pickInArc(hIdx, 1, tailDist - 1, rnd);
+        if (any >= 0) {
+            return any;
         }
         int free = total - n;
         if (free <= 0) {
@@ -792,6 +789,30 @@ final class AutoPilot {
         }
         int pick = rnd.nextInt(free);
         for (int c = 0; c < total; c++) {
+            if (!blocked[c] && pick-- == 0) {
+                return c;
+            }
+        }
+        return -1;
+    }
+
+    /** Random free cell {@code from..to} steps ahead of the head on the cycle. */
+    private int pickInArc(int hIdx, int from, int to, java.util.Random rnd) {
+        if (to < from) {
+            return -1;
+        }
+        int count = 0;
+        for (int d = from; d <= to; d++) {
+            if (!blocked[cycleCell[(hIdx + d) % total]]) {
+                count++;
+            }
+        }
+        if (count == 0) {
+            return -1;
+        }
+        int pick = rnd.nextInt(count);
+        for (int d = from; d <= to; d++) {
+            int c = cycleCell[(hIdx + d) % total];
             if (!blocked[c] && pick-- == 0) {
                 return c;
             }

@@ -169,10 +169,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int state = STATE_READY;
     private float tickAccum;
     private float currentInterval = 168f;
-    private float speedScale = 0.5f;
     private long lastEatMs;
     private float deadWait;
     private float foodTimer;
+    /** Ticks the current fruit had no path at all (SHORT PATH watchdog). */
+    private int foodStuckTicks;
+    /** Ticks since the last fruit was eaten (SHORT PATH watchdog). */
+    private int noEatTicks;
     private float winWait;
     private float animTime;
     private float deadTime;
@@ -272,6 +275,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private boolean gestureConsumed;
     private boolean tapOnPause;
     private float[] drawnPts = new float[0];
+    /** True on the tick that ate a fruit: the head is drawn on the new cell. */
+    private boolean snapHead;
     private int drawnCount;
     private Shader greenShader;
     private float greenShaderTop = Float.NaN;
@@ -954,23 +959,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     /* Simulation                                                         */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Speed model with acceleration. The target interval shrinks as the score
-     * grows, and in auto mode it is also limited so the snake covers the
-     * remaining distance to the fruit within at most 3 seconds:
-     *
-     *     interval <= 3000ms / stepsToFood
-     *
-     * A feedback loop refines it: every fruit that took longer than 3s speeds
-     * the snake up (speedScale down), a quick one lets it relax again. The
-     * current interval walks towards the target at a bounded rate, which is the
-     * visible acceleration.
-     *
-     * If the fruit is still not eaten after 3 seconds, the target keeps shrinking
-     * exponentially with the overdue time (down to a hard 5ms floor) and the
-     * acceleration limit is lifted, so the snake keeps gaining speed until it
-     * reaches the fruit.
-     */
     /** The cycle pilot of the current mode (null for manual / short path). */
     private AutoPilot activePilot() {
         if (mode == MODE_AUTOWIN) {
@@ -983,11 +971,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void updateSpeed(float dt) {
-        float floor = autoMode ? 22f : 70f;
-        float target = Math.max(floor, 168f - (score / 10) * 4f);
-        boolean catchingUp = false;
+        // No acceleration ramp and no "teleport" warp any more: a steady tick
+        // interval. It only shrinks when the fruit is far away, so the snake still
+        // reaches it within ~3 seconds.
+        float base = autoMode ? 60f : 110f;
+        // Never step faster than ~half a cell per rendered frame (that is what made
+        // the head look like it jumped instead of gliding).
+        float floor = autoMode ? 32f : 60f;
+        float target = base;
         if (autoMode) {
-            target *= speedScale;
             int steps = -1;
             if (mode == MODE_SHORTPATH && pathPilot != null) {
                 steps = pathPilot.getStepsToFood();
@@ -995,46 +987,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 steps = activePilot().getStepsToFood();
             }
             if (steps > 0) {
-                target = Math.min(target, 3000f / steps);
+                target = Math.min(base, 3000f / steps);
             }
             target = Math.max(target, floor);
-
-            if (foodTimer > 3f) {
-                catchingUp = true;
-                float overdue = Math.min(20f, foodTimer - 3f);
-                target *= (float) Math.exp(-overdue * 1.2f);
-                target = Math.max(target, 5f);
-            }
         }
-
-        // acceleration limit: interval may change by at most this much per second
-        float maxDelta = (catchingUp ? 60000f : 3000f) * dt;
-        if (target < currentInterval - maxDelta) {
-            currentInterval -= maxDelta;
-        } else if (target > currentInterval + maxDelta) {
-            currentInterval += maxDelta;
-        } else {
-            currentInterval = target;
-        }
-        currentInterval = Math.max(5f, Math.min(220f, currentInterval));
+        currentInterval = Math.max(floor, Math.min(220f, target));
     }
 
     private float interval() {
         return currentInterval;
     }
 
-    /** Adaptive speed: keep the time to the next fruit at or below 3 seconds. */
+    /** Keeps the fruit timer in sync (the speed model itself is now fixed). */
     private void onFruitEaten() {
-        long now = android.os.SystemClock.uptimeMillis();
-        if (autoMode && lastEatMs > 0L) {
-            long took = now - lastEatMs;
-            if (took > 2500L) {
-                speedScale = Math.max(0.10f, speedScale * 0.72f);
-            } else if (took < 1500L) {
-                speedScale = Math.min(1f, speedScale * 1.08f);
-            }
-        }
-        lastEatMs = now;
+        lastEatMs = android.os.SystemClock.uptimeMillis();
     }
 
     private void resetBoardState() {
@@ -1065,6 +1031,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         dirQueue.clear();
         prevCells = cellsToArray();
+        snapHead = false;
         score = 0;
         tickAccum = 0f;
         animTime = 0f;
@@ -1149,7 +1116,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             dirQueue.clear();
             clearEatLog();
             lastEatMs = 0L;
-            speedScale = 1f;
         }
     }
 
@@ -1167,7 +1133,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         tickAccum = -520f;
         clearEatLog();
         lastEatMs = 0L;
-        speedScale = 1f;
     }
 
     private void pauseGame() {
@@ -1222,14 +1187,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 updateReplay(dt);
             } else {
                 foodTimer += dt;
-                // "Teleport" catch-up: once a fruit is overdue for more than 2s
-                // the simulation is stepped many times per rendered frame. The
-                // snake still follows its path - only frames are skipped.
-                float speedMul = 1f;
-                if (autoMode && foodTimer > 2f) {
-                    speedMul = 1f + Math.min(30f, (foodTimer - 2f) * 10f);
-                }
-                tickAccum += dt * 1000f * speedMul;
+                // Steady stepping: no teleport / multi-step warp (it caused the
+                // stutter and hid what the snake was really doing).
+                tickAccum += dt * 1000f;
                 int guard = 0;
                 while (tickAccum >= interval() && state == STATE_RUNNING && guard++ < 40) {
                     tickAccum -= interval();
@@ -1291,6 +1251,24 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 // inside the free arc between the head and the tail.
                 d = cycle.decide(cellsToArray(), foodCell, dirX, dirY);
             }
+            if (mode == MODE_SHORTPATH && pathPilot != null) {
+                // Watchdog: an unplannable fruit, or a fruit the snake keeps circling
+                // without ever eating it, would loop for ever (and the old build did
+                // exactly that). Bring the fruit to a cell it can reach right away.
+                if (pathPilot.getStepsToFood() < 0) {
+                    foodStuckTicks++;
+                } else {
+                    foodStuckTicks = 0;
+                }
+                if (foodStuckTicks == 0) {
+                    noEatTicks++;
+                }
+                if (foodStuckTicks > 40 || noEatTicks > 100) {
+                    rescueFruit();
+                    foodStuckTicks = 0;
+                    noEatTicks = 0;
+                }
+            }
             if (d != null) {
                 dirX = d[0];
                 dirY = d[1];
@@ -1309,13 +1287,22 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             if (mode == MODE_SHORTPATH && pathPilot != null) {
                 Integer headPeek = body.peekFirst();
                 if (headPeek != null) {
-                    int qx = headPeek % COLS + dirX;
-                    int qy = headPeek / COLS + dirY;
+                    int hx = headPeek % COLS;
+                    int hy = headPeek / COLS;
+                    int qx = hx + dirX;
+                    int qy = hy + dirY;
                     if (qx < 0 || qx >= COLS || qy < 0 || qy >= rows) {
                         int[] alt = pathPilot.fallbackDirection(cellsToArray());
                         if (alt != null) {
                             dirX = alt[0];
                             dirY = alt[1];
+                        } else {
+                            // Nothing free at all: any on-board step beats a wall.
+                            for (int k = 0; k < 4 && (hx + dirX < 0 || hx + dirX >= COLS
+                                    || hy + dirY < 0 || hy + dirY >= rows); k++) {
+                                dirX = NEIGH[k][0];
+                                dirY = NEIGH[k][1];
+                            }
                         }
                     }
                 }
@@ -1376,6 +1363,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         int ni = ny * COLS + nx;
         boolean eats = ni == foodCell;
+        snapHead = eats;
         prevCells = cellsToArray();
         if (!eats) {
             body.pollLast();
@@ -1398,6 +1386,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         if (eats) {
             score += 10;
+            noEatTicks = 0;
             if (score > highScore) {
                 highScore = score;
             }
@@ -1491,17 +1480,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 return true;
             }
         }
-        // Otherwise keep chasing the tail but KEEP A 2-CELL GAP: the head must
-        // stay at least two free steps behind the tail, so an unexpected fruit
-        // (which delays the tail by one step while the snake grows) cannot make
-        // the snake bite itself.
-        int[] tailDist = distFromTail();
+        // Otherwise keep chasing the tail but keep a safe gap. Every candidate is
+        // verified on the body it would produce: build the post-move snake, BFS to
+        // its tail and require the distance to stay >= 2. That way a turn can
+        // never cut the follow path off.
+        int[] cellsNow = cellsToArray();
         int hx = head % COLS;
         int hy = head / COLS;
-        int bestGap = -1;
-        int bestDir = -1;
-        int bestAny = -1;
-        int bestAnyDist = -1;
+        int bestK = -1;
+        int bestD = Integer.MAX_VALUE;
+        int fallbackK = -1;
+        int fallbackD = -1;
         for (int k = 0; k < 4; k++) {
             int nx = hx + NEIGH[k][0];
             int ny = hy + NEIGH[k][1];
@@ -1509,24 +1498,23 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 continue;
             }
             int n = ny * COLS + nx;
-            int d = tailDist[n];
+            if (body.contains(n) && n != tail) {
+                continue;
+            }
+            int d = tailDistanceAfterMove(cellsNow, n);
             if (d < 0) {
                 continue;
             }
-            if (d >= 3) {
-                // closest to the tail while keeping at least a 2-cell gap after
-                // the move (the tail advances one cell every step)
-                if (bestDir < 0 || d < bestGap) {
-                    bestGap = d;
-                    bestDir = k;
-                }
+            if (d >= 2 && d < bestD) {
+                bestD = d;
+                bestK = k;
             }
-            if (d > bestAnyDist) {
-                bestAnyDist = d;
-                bestAny = k;
+            if (d > fallbackD) {
+                fallbackD = d;
+                fallbackK = k;
             }
         }
-        int pick = bestDir >= 0 ? bestDir : bestAny;
+        int pick = bestK >= 0 ? bestK : fallbackK;
         if (pick < 0) {
             following = false;
             tickAccum = 0f;
@@ -1535,6 +1523,60 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         dirX = NEIGH[pick][0];
         dirY = NEIGH[pick][1];
         return true;
+    }
+
+    /**
+     * Distance from the tail to {@code newHead} after moving there, on the body
+     * that move would produce (the tail advances one cell). -1 when unreachable.
+     */
+    private int tailDistanceAfterMove(int[] cells, int newHead) {
+        int n = cells.length;
+        if (n < 2) {
+            return -1;
+        }
+        int[] sim = new int[n];
+        sim[0] = newHead;
+        for (int i = 0; i < n - 1; i++) {
+            sim[i + 1] = cells[i];
+        }
+        int total = COLS * rows;
+        boolean[] occ = new boolean[total];
+        for (int c : sim) {
+            occ[c] = true;
+        }
+        int start = sim[n - 1];      // tail
+        int target = sim[0];         // head
+        occ[target] = false;
+        occ[start] = false;
+        int[] dist = new int[total];
+        java.util.Arrays.fill(dist, -1);
+        int[] queue = new int[total];
+        int qh = 0;
+        int qt = 0;
+        dist[start] = 0;
+        queue[qt++] = start;
+        while (qh < qt) {
+            int cur = queue[qh++];
+            if (cur == target) {
+                return dist[cur];
+            }
+            int cx = cur % COLS;
+            int cy = cur / COLS;
+            for (int k = 0; k < 4; k++) {
+                int nx = cx + NEIGH[k][0];
+                int ny = cy + NEIGH[k][1];
+                if (nx < 0 || nx >= COLS || ny < 0 || ny >= rows) {
+                    continue;
+                }
+                int c = ny * COLS + nx;
+                if (occ[c] || dist[c] >= 0) {
+                    continue;
+                }
+                dist[c] = dist[cur] + 1;
+                queue[qt++] = c;
+            }
+        }
+        return -1;
     }
 
     /** BFS distance from the tail over free cells (the body is a wall). */
@@ -1603,43 +1645,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         int target = waypoints.get(0);
         int hx = head % COLS;
         int hy = head / COLS;
-        int tx = target % COLS;
-        int ty = target / COLS;
-        int wantX = Integer.compare(tx, hx);
-        int wantY = Integer.compare(ty, hy);
-        boolean reverseX = wantX != 0 && dirY == 0 && dirX == -wantX;
-        boolean reverseY = wantY != 0 && dirX == 0 && dirY == -wantY;
-        if (wantX != 0 && !reverseX) {
-            dirX = wantX;
-            dirY = 0;
-        } else if (wantY != 0 && !reverseY) {
-            dirX = 0;
-            dirY = wantY;
-        } else if (wantX != 0 || wantY != 0) {
-            int[] d = detourDir(hx, hy);
-            dirX = d[0];
-            dirY = d[1];
+        // Auto path: the same shortest-path search the AI modes use, so a waypoint
+        // tap is enough - the snake finds its own way around its body instead of
+        // walking the stair-step line straight into it.
+        int[] path = findPathTo(cellsToArray(), target);
+        if (path != null && path.length > 1) {
+            int nxt = path[1];
+            dirX = Integer.compare(nxt % COLS, hx);
+            dirY = Integer.compare(nxt / COLS, hy);
+            return true;
         }
-        return true;
-    }
-
-    /** Legal perpendicular step used when the target sits exactly behind. */
-    private int[] detourDir(int hx, int hy) {
-        int[][] tries = dirX != 0
-                ? new int[][]{{0, -1}, {0, 1}}
-                : new int[][]{{-1, 0}, {1, 0}};
-        for (int[] d : tries) {
-            int nx = hx + d[0];
-            int ny = hy + d[1];
-            if (nx < 0 || nx >= COLS || ny < 0 || ny >= rows) {
-                continue;
-            }
-            if (body.contains(ny * COLS + nx)) {
-                continue;
-            }
-            return d;
-        }
-        return new int[]{dirX, dirY};
+        // No way through right now (the target is sealed in). Stop the run so the
+        // player can fix the order instead of ramming the body.
+        manualMoving = false;
+        return false;
     }
 
     private int cellAt(float x, float y) {
@@ -2205,14 +2224,30 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     /** BFS shortest path (cells) from the head to {@code target}, body = wall. */
     private int[] findPathTo(int[] cells, int target) {
-        int total = COLS * rows;
-        if (cells.length == 0 || target < 0 || target >= total) {
+        if (cells.length == 0 || target < 0) {
             return null;
+        }
+        return findPathFrom(cells, cells[0], target);
+    }
+
+    /**
+     * Shortest legal path {@code from -> to} around the snake's own body (the tail
+     * cell counts as free, it moves away). Returns the cells after {@code from} ...
+     * {@code to}, both included, or null when there is no way through.
+     */
+    private int[] findPathFrom(int[] cells, int from, int to) {
+        int total = COLS * rows;
+        if (cells.length == 0 || from < 0 || from >= total || to < 0 || to >= total) {
+            return null;
+        }
+        if (from == to) {
+            return new int[]{from};
         }
         boolean[] wall = new boolean[total];
         for (int c : cells) {
             wall[c] = true;
         }
+        wall[from] = false;
         if (cells.length > 1) {
             wall[cells[cells.length - 1]] = false;   // the tail moves away
         }
@@ -2221,13 +2256,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         int[] queue = new int[total];
         int qh = 0;
         int qt = 0;
-        int head = cells[0];
-        parent[head] = -1;
-        queue[qt++] = head;
+        parent[from] = -1;
+        queue[qt++] = from;
         boolean reached = false;
         while (qh < qt) {
             int cur = queue[qh++];
-            if (cur == target) {
+            if (cur == to) {
                 reached = true;
                 break;
             }
@@ -2240,7 +2274,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     continue;
                 }
                 int n = ny * COLS + nx;
-                if (parent[n] != -2 || (wall[n] && n != target)) {
+                if (parent[n] != -2 || (wall[n] && n != to)) {
                     continue;
                 }
                 parent[n] = cur;
@@ -2251,7 +2285,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             return null;
         }
         ArrayList<Integer> rev = new ArrayList<>();
-        for (int c = target; c != -1; c = parent[c]) {
+        for (int c = to; c != -1; c = parent[c]) {
             rev.add(c);
         }
         int[] path = new int[rev.size()];
@@ -2279,6 +2313,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void spawnFood() {
         foodTimer = 0f;
+        foodStuckTicks = 0;
+        noEatTicks = 0;
         int total = COLS * Math.max(rows, ROWS_MIN);
         int free = total - body.size();
         if (free <= 0) {
@@ -2318,9 +2354,62 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         int pick = randomFreeCell(total);
         if (pick >= 0) {
             foodCell = pick;
+            fixFoodReachability();
             return;
         }
         foodCell = 0;
+        fixFoodReachability();
+    }
+
+    /**
+     * Brings a fruit the planner keeps circling to the nearest cell the head can
+     * actually reach, so the run always keeps eating. When the head is fully walled
+     * in by its own body, the fruit goes on the tail cell - the only cell left that
+     * the head can still walk into.
+     */
+    private void rescueFruit() {
+        if (pathPilot == null || mode != MODE_SHORTPATH || body.isEmpty()) {
+            return;
+        }
+        int[] cellsNow = cellsToArray();
+        int c = pathPilot.nearestFreeCell(cellsNow);
+        if (c < 0) {
+            int tailCell = cellsNow[cellsNow.length - 1];
+            if (tailCell != cellsNow[0]) {
+                c = tailCell;
+            }
+        }
+        if (c >= 0 && c != foodCell && c != cellsNow[0]) {
+            foodCell = c;
+            foodTimer = 0f;
+        }
+    }
+
+    /**
+     * SHORT PATH must never leave an uneatable fruit: if the head cannot reach it,
+     * move it into the reachable pocket; when the snake has sealed itself in
+     * completely (the head has no free neighbour at all) drop it on the tail cell -
+     * the only cell left that the head can still walk into.
+     */
+    private void fixFoodReachability() {
+        if (pathPilot == null || mode != MODE_SHORTPATH || foodCell < 0 || body.isEmpty()) {
+            return;
+        }
+        int[] cellsNow = cellsToArray();
+        if (pathPilot.foodReachable(cellsNow, foodCell)) {
+            return;
+        }
+        int c = pathPilot.reachableFreeCell(cellsNow, rnd);
+        if (c < 0) {
+            int tailCell = cellsNow[cellsNow.length - 1];
+            if (tailCell != cellsNow[0]) {
+                c = tailCell;
+            }
+        }
+        if (c >= 0 && c != foodCell && c != cellsNow[0]) {
+            foodCell = c;
+            foodTimer = 0f;
+        }
     }
 
     /** Uniformly random empty cell, -1 when the board is full. */
@@ -2467,6 +2556,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + " padReplay=" + Math.round(padReplayBtn.centerX()) + ","
                     + Math.round(padReplayBtn.centerY())
                     + " coll=" + routeCollisions().size()
+                    + " stuck=" + (pathPilot != null ? pathPilot.stuckTicks() : -1)
                     + " gap=" + (body.size() > 1 ? distFromTail()[body.peekFirst()] : -1)
                     + " list=" + (wpListOpen ? 1 : 0)
                     + " follow=" + (following ? 1 : 0) + "/" + (followPicking ? 1 : 0)
@@ -2726,19 +2816,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (waypoints.isEmpty() || body.isEmpty()) {
             return;
         }
+        ArrayList<Integer> route = routeCellsTo(waypoints.size() - 1);
+        if (route.size() < 2) {
+            return;
+        }
         float half = cell / 2f;
-        int head = body.peekFirst();
-        float sx = boardLeft + (head % COLS) * cell + half;
-        float sy = boardTop + (head / COLS) * cell + half;
         Path path = new Path();
-        path.moveTo(sx, sy);
-        float cy = sy;
-        for (int wp : waypoints) {
-            float tx = boardLeft + (wp % COLS) * cell + half;
-            float ty = boardTop + (wp / COLS) * cell + half;
-            path.lineTo(tx, cy);   // horizontal leg first, like the movement rule
-            path.lineTo(tx, ty);
-            cy = ty;
+        int first = route.get(0);
+        path.moveTo(boardLeft + (first % COLS) * cell + half,
+                boardTop + (first / COLS) * cell + half);
+        for (int i = 1; i < route.size(); i++) {
+            int cc = route.get(i);
+            path.lineTo(boardLeft + (cc % COLS) * cell + half,
+                    boardTop + (cc / COLS) * cell + half);
         }
         c.drawPath(path, previewPaint);
     }
@@ -2787,42 +2877,27 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     /**
-     * Marks the waypoints that the planned route runs over out of order (a leg
-     * passes through a waypoint that is not its own start/end), which the player
-     * must fix by reordering.
+     * Marks the waypoints the route cannot reach: each leg is searched with the same
+     * shortest-path rule the snake uses, so a marker means "the snake really cannot
+     * get there" instead of "the straight leg crosses another waypoint".
      */
     private boolean[] brokenWaypoints() {
         int n = waypoints.size();
         boolean[] broken = new boolean[n];
-        if (n < 2 || body.isEmpty()) {
+        if (n == 0 || body.isEmpty()) {
             return broken;
         }
+        int[] cells = cellsToArray();
         int cur = body.peekFirst();
         for (int i = 0; i < n; i++) {
             int to = waypoints.get(i);
-            int cx = cur % COLS;
-            int cy = cur / COLS;
-            int tx = to % COLS;
-            int ty = to / COLS;
-            while (cx != tx) {
-                cx += Integer.compare(tx, cx);
-                markCrossed(broken, cy * COLS + cx, i);
-            }
-            while (cy != ty) {
-                cy += Integer.compare(ty, cy);
-                markCrossed(broken, cy * COLS + cx, i);
+            if (to != cur && findPathFrom(cells, cur, to) == null) {
+                broken[i] = true;
+                continue;
             }
             cur = to;
         }
         return broken;
-    }
-
-    private void markCrossed(boolean[] broken, int cell, int leg) {
-        for (int j = 0; j < waypoints.size(); j++) {
-            if (j != leg && waypoints.get(j) == cell) {
-                broken[j] = true;
-            }
-        }
     }
 
     /** Labels of the broken waypoints (1-based) for the hint line. */
@@ -2955,21 +3030,33 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (body.isEmpty() || wpIndex < 0 || wpIndex >= waypoints.size()) {
             return out;
         }
+        int[] cells = cellsToArray();
         int cur = body.peekFirst();
         out.add(cur);
         for (int i = 0; i <= wpIndex; i++) {
             int target = waypoints.get(i);
-            int cx = cur % COLS;
-            int cy = cur / COLS;
-            int tx = target % COLS;
-            int ty = target / COLS;
-            while (cx != tx) {
-                cx += Integer.compare(tx, cx);
-                out.add(cy * COLS + cx);
-            }
-            while (cy != ty) {
-                cy += Integer.compare(ty, cy);
-                out.add(cy * COLS + cx);
+            if (target != cur) {
+                int[] leg = findPathFrom(cells, cur, target);
+                if (leg != null && leg.length > 1) {
+                    for (int k = 1; k < leg.length; k++) {
+                        out.add(leg[k]);
+                    }
+                } else {
+                    // Sealed in: still show the straight leg, so the player can see
+                    // which waypoint is the problem (it gets the broken marker).
+                    int cx = cur % COLS;
+                    int cy = cur / COLS;
+                    int tx = target % COLS;
+                    int ty = target / COLS;
+                    while (cx != tx) {
+                        cx += Integer.compare(tx, cx);
+                        out.add(cy * COLS + cx);
+                    }
+                    while (cy != ty) {
+                        cy += Integer.compare(ty, cy);
+                        out.add(cy * COLS + cx);
+                    }
+                }
             }
             cur = target;
         }
@@ -3166,8 +3253,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         float hx = cellPx(prevCells[0]);
         float hy = cellPy(prevCells[0]);
-        drawnPts[0] = hx + (cellPx(newHead) - hx) * t;
-        drawnPts[1] = hy + (cellPy(newHead) - hy) * t;
+        // The head glides from its previous cell to the new one, exactly like the
+        // body: snapping a whole cell per tick is what made slow speeds look jerky.
+        // Only on the tick that eats the fruit is it placed on the new cell at once,
+        // so it is *in* the fruit cell when the fruit disappears.
+        float ht = snapHead ? 1f : t;
+        drawnPts[0] = hx + (cellPx(newHead) - hx) * ht;
+        drawnPts[1] = hy + (cellPy(newHead) - hy) * ht;
 
         int idx = 2;
         for (int i = 0; i < m - 1; i++) {
@@ -3251,7 +3343,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         float angle = (float) Math.toDegrees(Math.atan2(dirY, dirX));
         c.save();
-        c.translate(hx + dirX * cell * 0.03f, hy + dirY * cell * 0.03f);
+        // Centred exactly on the head cell (no forward shift, no tongue).
+        c.translate(hx, hy);
         c.rotate(angle);
 
         headGlowPaint.setAlpha((int) (255 * alpha));
@@ -3290,17 +3383,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         nostrilPaint.setAlpha((int) (0x99 * alpha));
         c.drawCircle(hl * 0.74f, -hw * 0.22f, w * 0.030f, nostrilPaint);
         c.drawCircle(hl * 0.74f, hw * 0.22f, w * 0.030f, nostrilPaint);
-
-        if (state == STATE_RUNNING && Math.sin(animTime * 6.5) > 0.35) {
-            tonguePaint.setAlpha((int) (255 * alpha));
-            tonguePaint.setStrokeWidth(Math.max(dp(1.4f), w * 0.06f));
-            float x0 = hl * 0.96f;
-            float x1 = hl + w * 0.30f;
-            float x2 = hl + w * 0.52f;
-            c.drawLine(x0, 0f, x1, 0f, tonguePaint);
-            c.drawLine(x1, 0f, x2, -w * 0.16f, tonguePaint);
-            c.drawLine(x1, 0f, x2, w * 0.16f, tonguePaint);
-        }
+        // No tongue: the head itself fills the cell it stands on, so what you see
+        // is exactly the grid cell the snake occupies.
         c.restore();
     }
 
@@ -3405,14 +3489,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             }
             broken = brokenLabel();
             if (broken.length() > 0 && !following && !followPicking) {
-                hint = "BROKEN tại #" + broken + "  •  đổi thứ tự waypoint";
+                hint = "BROKEN tại #" + broken + "  •  không có đường tới";
             } else if (broken.isEmpty() && !following && !followPicking
                     && !waypoints.isEmpty()) {
                 ArrayList<Integer> hits = routeCollisions();
                 if (!hits.isEmpty()) {
                     int hitCell = hits.get(0);
                     hint = "COLLISION: route đâm thân ở (" + (hitCell % COLS) + ","
-                            + (hitCell / COLS) + ")  •  sửa waypoint";
+                            + (hitCell / COLS) + ")  •  dời waypoint";
                 }
             }
             collision = hint.startsWith("COLLISION");

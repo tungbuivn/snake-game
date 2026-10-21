@@ -13,16 +13,20 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
 ## Tính năng
 
 - **4 chế độ**, 4 nút xếp **theo hàng dọc** trên màn hình bắt đầu:
-  1. `CHƠI` — **đi theo waypoint**: rắn đứng yên chờ; chạm lên board để đặt waypoint
-     (chạm vào waypoint có sẵn để chọn/sửa), hiện **4 phím mũi tên + nút ✕** để dịch
-     điểm hoặc xoá; có **đường preview nét đứt mờ** (đi ngang trước, rồi dọc) và nút
+  1. `CHƠI` — **đi theo waypoint + tự tìm đường**: rắn đứng yên chờ; chạm lên board để
+     đặt waypoint (chạm vào waypoint có sẵn để chọn/sửa), hiện **4 phím mũi tên + nút ✕**
+     để dịch điểm hoặc xoá; có **đường preview nét đứt mờ** vẽ đúng đường sẽ đi và nút
      **`MOVE`** để rắn chạy theo route (đang chạy thì nút đổi thành `DỪNG`); hết waypoint
      thì rắn tự đứng lại. Chưa bấm `MOVE` thì rắn **không di chuyển**.
+     **Chạm waypoint là đủ** — không phải tự vẽ từng bước: mỗi đoạn route được tìm bằng
+     **BFS ngắn nhất coi thân rắn là tường** (đuôi đang bỏ đi nên tính là trống), đúng
+     thuật toán của các chế độ AI, nên rắn **tự vòng qua thân mình** để tới waypoint;
+     preview, bóng ma và cảnh báo `COLLISION` đều tính trên chính đường đó.
      Nút **`PREVIEW`** xem lại route **hiện tại** như một đoạn video (bóng xanh cyan chạy
      trên route, rắn thật đứng yên); thoát replay là chơi tiếp bình thường.
-     Nếu **route chạy qua một waypoint khác** (đi ngang qua điểm vàng/điểm khác trước khi
-     tới lượt) thì app đánh dấu **`BROKEN`**: dấu ✕ đỏ ngay trên waypoint đó + dòng cảnh
-     báo hồng ở thanh dưới (`BROKEN tại #3,#5`) để bạn đổi lại thứ tự.
+     Nếu **không có đường tới một waypoint** (bị thân rắn bịt kín) thì app đánh dấu
+     **`BROKEN`**: dấu ✕ đỏ ngay trên waypoint đó + dòng cảnh báo hồng ở thanh dưới
+     (`BROKEN tại #3,#5 • không có đường tới`) để bạn dời điểm hoặc đổi thứ tự.
      Nếu **route đâm vào thân rắn** (mô phỏng cả đuôi di chuyển), app đánh dấu
      **`COLLISION`**: ✕ đỏ + vòng tròn đỏ ngay ô sẽ đâm, kèm dòng hồng
      `COLLISION: route đâm thân ở (x,y) • sửa waypoint`.
@@ -47,6 +51,11 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
         phương án ăn an toàn khác.
      3. Cuối cùng: chọn ô trống giữ được đường tới đuôi với nhiều không gian nhất.
      Quả sinh **random**; nếu vẫn bị dồn vào thế bí thì cắt đuôi và chạy tiếp.
+     **Chống lặp vô tận**: nếu quả **không có đường tới** (bị thân bịt kín) quá 40 tick,
+     hoặc **quá 100 tick chưa ăn được quả** (rắn cứ vòng quanh), quả được **dời tới ô gần
+     nhất mà đầu rắn tới được** (nếu đầu bị bịt kín hoàn toàn thì đặt ngay ô đuôi) — nên
+     ván luôn ăn tiếp được, không bao giờ quay vòng mãi. Đâm tường cũng bị chặn: hết đường
+     thì rắn cắn thân (bị cắt ngắn) chứ không chết vì tường.
   4. `MANGO` — bản MangoSnake: **mỗi ván một chu trình Hamilton ngẫu nhiên** (250 lượt
      split + mend), cùng luật đi an toàn như `AUTO WIN`, quả sinh random trong cung →
      cũng **luôn thắng**. Đo 60s: 62 quả, avg 0.93s, 20 lượt cuối avg 0.60s, max 2.5s,
@@ -74,16 +83,13 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
   loại (vượt là mất thêm nguyên một vòng); chỉ khi mọi nước đều vượt mới chọn bước
   ngắn nhất — nhờ vậy đầu luôn tiến đều tới quả.
 
-- **Gia tốc + ngân sách 3 giây + "đuổi kịp"**: `interval` tiến về đích với **giới hạn
-  gia tốc 3000ms/s** (tăng/giảm tốc mượt). Đích mỗi khung = min(nền theo điểm,
-  `3000ms / stepsToFood`) nhân hệ số thích nghi đo từ thời gian ăn thực tế, sàn 22ms.
-  **Nếu quá 3s mà chưa ăn được**, đích tiếp tục giảm theo hàm mũ theo thời gian trễ
-  (`×exp(-1.2·trễ)`), giới hạn gia tốc được mở (60000ms/s) và sàn hạ xuống **5ms** —
-  rắn cứ tăng tốc dần cho tới khi ăn được. **Quá 2s chưa ăn** thì bật "teleport":
-  mỗi khung hình mô phỏng nhiều bước (×1 → ×31 tuỳ độ trễ) nên rắn *tua nhanh* tới
-  quả — vẫn đi đúng đường, chỉ bớt khung animation. Đo trên máy (5 phút): **0 lần
-  chết**, 796 quả, trung bình 0.38s/quả, trung vị 0.17s, p90 0.78s, max 3.5s,
-  **98% lượt ≤3s**.
+- **Tốc độ đều, KHÔNG gia tốc**: `interval` cố định — **60ms/ô** ở chế độ tự động,
+  **110ms/ô** ở chơi tay. Nó chỉ co lại (sàn **32ms**) khi quả còn quá xa, theo ngân
+  sách `3000ms / stepsToFood`, để quả tới trong vài giây. **Không còn** gia tốc dần,
+  không còn hệ số thích nghi, và **không còn "teleport"** (mỗi khung mô phỏng nhiều
+  bước) — chính mấy thứ đó làm hình giật và làm chế độ chậm trông như rắn trượt.
+  Ở chế độ chu trình, quả chỉ sinh trong **nửa gần của cung trống** (≤160 bước) nên
+  rắn không phải băng hết một vòng mới tới quả.
 - **Chiến thắng**: khi không còn ô trống để sinh quả (rắn phủ kín board), game vào
   trạng thái **CHIẾN THẮNG** (thẻ vàng, điểm cuối). Watch-mode tự chơi lại sau 4s.
   Đo trên máy: rắn đạt **800/800 đốt** sau 300s, `state=4`.
@@ -93,8 +99,10 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
   **ROUND join** tự bo bán kính = nửa bề rộng (không bo tay) nên bề dày luôn hằng số;
   **thân là MỘT nét vẽ màu phẳng** (`#35D07F`, không gradient/không vảy/không viền) →
   chỉ 1 lệnh vẽ cho cả thân; đầu là capsule to hơn thân (0.88×cell) có gradient, mắt
-  (đồng tử + ánh sáng), lỗ mũi, lưỡi thè, mắt X khi thua; đuôi bo tròn đúng bằng bề
-  rộng thân.
+  (đồng tử + ánh sáng), lỗ mũi, mắt X khi thua — **không vẽ lưỡi**. Đầu **nội suy mượt**
+  từ ô cũ sang ô mới y như thân (nhờ vậy chế độ chậm không còn giật từng ô), **riêng
+  tick ăn quả** thì đặt ngay vào tâm ô quả (nên đầu nằm đúng ô quả vừa ăn, không bị
+  tụt lại 1 ô); mũi đuôi cũng nội suy mượt. Đuôi bo tròn đúng bằng bề rộng thân.
 - HUD: pill `ĐIỂM` / `KỶ LỤC` cao 52dp, nhãn và số tách nhau ~7dp (không dính).
 - Mồi táo có quầng sáng, nhấp nháy; hạt hiệu ứng khi ăn; điểm `+10` bay lên.
 - Điểm số + kỷ lục lưu `SharedPreferences`, tạm dừng/tiếp tục, overlay kết thúc,
@@ -154,7 +162,7 @@ muốn phát hành chính thức trên Play Store thì thay keystore riêng).
 
 | Thao tác | Tác dụng |
 | --- | --- |
-| Chạm lên board (chế độ `CHƠI`) | Đặt waypoint mới; chạm vào waypoint có sẵn để chọn nó |
+| Chạm lên board (chế độ `CHƠI`) | Đặt waypoint mới; chạm vào waypoint có sẵn để chọn nó. Rắn **tự tìm đường ngắn nhất** (BFS, thân là tường) tới waypoint đang là mục tiêu |
 | 4 phím mũi tên / `✕` | Dịch waypoint đang chọn 1 ô / xoá waypoint đó |
 | `AUTO` (giữa 4 mũi tên) | **Tự đặt waypoint an toàn**: lấy đường ngắn nhất đầu→quả (BFS, thân là tường), **mô phỏng ăn xong** rồi kiểm tra **vẫn còn đường bám đuôi**; chỉ khi qua mới đặt route (chỉ giữ **điểm gấp khúc** + quả). Không an toàn thì **tự chuyển sang route bám đuôi** để rắn không chết |
 | `LIST` (đối xứng với `✕`) | Mở **hộp thoại danh sách waypoint**: mỗi dòng ghi số thứ tự + toạ độ ô; **kéo-thả dòng** để đổi thứ tự (thả tới đâu là chèn tới đó), chạm 1 dòng để chọn nó, chạm ra ngoài hoặc `✕` để đóng |
