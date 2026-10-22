@@ -12,34 +12,32 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
 
 ## Tính năng
 
-- **4 chế độ**, 4 nút xếp **theo hàng dọc** trên màn hình bắt đầu:
-  1. `CHƠI` — **đi theo waypoint + tự tìm đường**: rắn đứng yên chờ; chạm lên board để
+- **2 cách chơi + CÀI ĐẶT**, các nút xếp **theo hàng dọc** trên màn hình bắt đầu:
+  1. `CHƠI` — **đi đúng route người chơi đặt**: rắn đứng yên chờ; chạm lên board để
      đặt waypoint (chạm vào waypoint có sẵn để chọn/sửa), hiện **4 phím mũi tên + nút ✕**
      để dịch điểm hoặc xoá; có **đường preview nét đứt mờ** vẽ đúng đường sẽ đi và nút
      **`MOVE`** để rắn chạy theo route (đang chạy thì nút đổi thành `DỪNG`); hết waypoint
      thì rắn tự đứng lại. Chưa bấm `MOVE` thì rắn **không di chuyển**.
-     **Chạm waypoint là đủ** — không phải tự vẽ từng bước: mỗi đoạn route được tìm bằng
-     **BFS ngắn nhất coi thân rắn là tường** (đuôi đang bỏ đi nên tính là trống), đúng
-     thuật toán của các chế độ AI, nên rắn **tự vòng qua thân mình** để tới waypoint;
-     preview, bóng ma và cảnh báo `COLLISION` đều tính trên chính đường đó.
-     Nút **`PREVIEW`** xem lại route **hiện tại** như một đoạn video (bóng xanh cyan chạy
-     trên route, rắn thật đứng yên); thoát replay là chơi tiếp bình thường.
-     Nếu **không có đường tới một waypoint** (bị thân rắn bịt kín) thì app đánh dấu
-     **`BROKEN`**: dấu ✕ đỏ ngay trên waypoint đó + dòng cảnh báo hồng ở thanh dưới
-     (`BROKEN tại #3,#5 • không có đường tới`) để bạn dời điểm hoặc đổi thứ tự.
-     Nếu **route đâm vào thân rắn** (mô phỏng cả đuôi di chuyển), app đánh dấu
-     **`COLLISION`**: ✕ đỏ + vòng tròn đỏ ngay ô sẽ đâm, kèm dòng hồng
-     `COLLISION: route đâm thân ở (x,y) • sửa waypoint`.
-     Khi chọn 1 waypoint, app vẽ thêm **bóng rắn màu cam mờ**, **vẽ đè lên trên rắn thật**
+     Mỗi đoạn giữa hai waypoint là **đoạn thẳng: ngang trước, dọc sau** (hình chữ L) —
+     đúng như preview; **không còn BFS tự tìm đường** và **không tự vòng qua thân**.
+     Rắn đi lần lượt qua các waypoint theo đúng thứ tự người chơi đặt.
+
+     Nếu **route đâm vào thân rắn**, app đánh dấu **`COLLISION`**: ✕ đỏ + vòng tròn đỏ
+     ngay ô sẽ đâm, kèm dòng hồng `COLLISION: route đâm thân ở (x,y) • sửa waypoint`.
+     Phép mô phỏng cho **đuôi rút ra từng tick**, nên route men theo đuôi đang bỏ đi
+     **không bị báo collision sai** và `MOVE` vẫn chạy bình thường.
+     Khi chọn 1 waypoint, app vẽ thêm **bóng rắn mờ màu tương phản** (tự chọn theo màu rắn hiện tại, ví dụ rắn vàng → bóng xanh dương), **vẽ đè lên trên rắn thật**
      và **luôn đủ chiều dài thân**: đầu ở waypoint, thân đi ngược theo route; nếu route
      ngắn hơn thân thì phần còn lại lấy tiếp từ các đốt hiện có (đuôi thật) — nhờ vậy
      luôn thấy được **đầu và đuôi** sẽ ở đâu để đặt waypoint tiếp theo.
-     Waypoint **được phép nằm trên thân rắn hiện tại** (khi rắn bò tới thì đuôi đã đi
-     qua, ô đó thường đã trống).
-     Nút **`FOLLOW`** (ô dưới-trái cụm phím): rắn **tự tìm đường bám theo đuôi** của mình;
-     bấm 1 lần rồi chạm lên **một đốt trên thân** để chọn **điểm dừng** — rắn bám đuôi tới
-     khi đầu tới đúng điểm đó thì dừng (bấm lần nữa để chạy bám đuôi không điểm dừng, hoặc
-     bấm `STOP` để dừng tay).
+     Waypoint **được phép nằm trên thân rắn hiện tại**; rắn đi theo route và chỉ cắt thân
+     nếu route thật sự đâm vào đốt chưa kịp rút.
+     Nút **`FOLLOW`** (ô dưới-trái cụm phím): bấm 1 lần → app **chỉ tạo route waypoint bám
+     đuôi** tới quả, chỉ nhận khi ăn xong vẫn còn đường tới đuôi; rắn **đứng yên** để người
+     chơi xem route, hợp lý thì bấm `MOVE` mới chạy. Khi FOLLOW **vẫn đang bật** mà rắn đi
+     hết route (ăn quả), app **tự tạo route mới từ ô đầu hiện tại** tới quả tiếp theo — vẫn
+     chờ người chơi bấm `MOVE`, không tự chạy. Bấm `FOLLOW` lần nữa (nút đổi thành `STOP`)
+     → **xoá toàn bộ waypoint** do FOLLOW tạo và dừng.
   2. `AUTOPLAY` — AI đi **chu trình Hamilton** (boustrophedon cố định) phủ toàn board:
      mỗi tick rắn **chỉ đi tiến trên chu trình**, trong **cung trống giữa đầu và đuôi**;
      quả sinh trong cung đó nên **luôn tới được** và **không bao giờ bị dời**; thân là một
@@ -59,8 +57,8 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
        **bước ngắn từng ô** (đường dài hơn, nhiều khúc hơn) — vẫn chỉ đi tiến nên không
        thể cắn thân.
      - `RND` — **chu trình ngẫu nhiên**: dựng lại bằng **divide & conquer + merge 2×2**
-       (mỗi lần đều `cycleValid`) rồi chơi lại trên chu trình mới.
-     Ba nút `TAIL` / `BFS` / `RND` **loại trừ nhau** (mỗi lúc chỉ một động cơ autoplay).
+       (mỗi lần đều `cycleValid`); chu trình mới được áp dụng ở **ván kế tiếp**, không reset ván đang chạy.
+     **Chỉ một** trong năm nút `TAIL` / `BFS` / `SC` / `ZZ` / `RND` được bật tại một thời điểm; bật nút này sẽ tắt bốn nút còn lại, bật lại nút đang bật = tắt hết.
      Test `WIN RATE`: **20 seed × 4 biến thể × 2 cỡ bàn = 160 ván → 100% thắng, 0 chết**
      (`winTick` TB 20×12: snake 3.448, randmerge 3.930; 20×30: snake 14.236, randmerge 22.500).
      Test `AI TOGGLES ARE LIVE` chứng minh `SC` và `ZZ` **thật sự đổi nước đi** (chữ ký
@@ -123,12 +121,11 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
      về đuôi **dài nhất** (phụ: nhiều ô trống nhất). Giữ đầu xa đuôi làm thân **trải
      rộng thành zig-zag** thay vì cuộn lại, nhờ đó mở lại đường tới quả;
   4. cùng đường → đi theo đường BFS tới đuôi; cuối cùng mới tới nước "nhiều ô trống nhất".
-  **`SC` và `ZZ` không ảnh hưởng `TAIL`**: hai toggle đó là tham số của động cơ **chu
-  trình** (SC = được bước vào ô đuôi đang bỏ đi, ZZ = bước ngắn từng ô). Khi `TAIL` bật,
-  `activePilot()` trả về pilot safe-search và `decide()` trả lời ngay từ nhánh tail-chase,
-  nên bật cả `TAIL` + `SC` + `ZZ` vẫn **chạy đúng TAIL**; `SC`/`ZZ` chỉ được **lưu lại**
-  và có tác dụng trở lại khi bạn chuyển sang chu trình/`BFS`. Test `TAIL vs SC/ZZ` chứng
-  minh điều đó: bật/tắt SC+ZZ cho **chữ ký chuỗi nước đi giống hệt nhau**.
+  **`SC` và `ZZ` là hai chế độ riêng của động cơ chu trình mặc định** (SC = được bước vào
+  ô đuôi đang bỏ đi, ZZ = bước ngắn từng ô). Vì chỉ một toggle được bật tại một thời điểm,
+  `SC`/`ZZ` không thể bật cùng `TAIL`/`BFS`/`RND`; khi chọn `SC` hoặc `ZZ`, autoplay dùng
+  chu trình mặc định với đúng modifier đó. Test `TAIL vs SC/ZZ` ở tầng `AutoPilot` chứng
+  minh `TAIL` bỏ qua hai modifier này nếu chúng được bật trực tiếp trên engine.
   **Đo thật** (8 seed × 2 cỡ bàn, test `SAFE SEARCH / TAIL CHASE`): **0 cắn, 0 đâm
   tường**, lấp **20×12: 99,6%** (thắng 4/8), **20×30: 99,0%** (thắng 2/8). Nghĩa là nó
   **gần như** điền kín bàn và **không bao giờ chết**, nhưng **không phải lúc nào cũng
@@ -177,8 +174,8 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
     biến mất **đúng lúc đầu đặt vào ô**, không “trôi qua rồi thụt lại”;
   - nước đi dự phóng **chính là nước đi tick sau dùng** (không `decide()` lần hai) nên
     hình và logic **không thể lệch** — đã đo: **0 lần lệch** trong 25 s chạy liên tục;
-  - chơi tay (waypoint/FOLLOW): **cũng dự phóng**, nhưng lấy từ **chính đường đi thật**
-    (`predictManualDir()`: `findPathTo()` tới waypoint kế tiếp, hoặc hướng vừa bấm) — cùng
+  - chơi tay (waypoint, kể cả route do FOLLOW tạo): **cũng dự phóng**, nhưng lấy từ **chính đường đi thật**
+    (`predictManualDir()`: `directStepCell()` tới waypoint kế tiếp, hoặc hướng vừa bấm) — cùng
     hàm mà bước đi thật dùng, nên đầu vẫn **dẫn đúng ô kế** chứ không đoán mò;
   - **khi dừng** (đang đặt waypoint / xem lại route) thì `planPaused`: `hasNext = false`
     và `interpolation() = 1` ⇒ đầu đứng **đúng ô thật**, đuôi đứng **đúng ô đuôi**, hình
@@ -208,9 +205,9 @@ vẽ trên `SurfaceView` với render thread riêng và nội suy chuyển độ
 - Điểm số + kỷ lục lưu `SharedPreferences`, tạm dừng/tiếp tục, overlay kết thúc,
   rung nhẹ (haptic) khi ăn/thua.
 - Board tự co giãn theo màn hình: 20 cột, số hàng 12..46. **Dải điều khiển luôn được
-  chừa riêng ở dưới grid** (cụm phím waypoint + PREVIEW + `MOVE` + tạm dừng) nên bàn
-  phím **không bao giờ đè lên ô chơi**; nhờ vậy máy 1440×3200 ra **20×34** (ô 68px) thay
-  vì 20×40 trước đây — grid gọn hơn, chọn điểm dễ hơn. HUD nằm sát mép trên hai bên
+  chừa riêng ở dưới grid** (cụm phím waypoint + `MOVE` + tạm dừng) nên bàn
+  phím **không bao giờ đè lên ô chơi**; bỏ hàng PREVIEW nên grid còn cao hơn, chọn điểm
+  dễ hơn. HUD nằm sát mép trên hai bên
   camera cutout. Fullscreen immersive.
 
 ## Cấu trúc
@@ -275,27 +272,33 @@ kín), không bao giờ cắn vào cổ, và in ra bảng từng lần cắn (`t
 
 | Thao tác | Tác dụng |
 | --- | --- |
-| Chạm lên board (chế độ `CHƠI`) | Đặt waypoint mới; chạm vào waypoint có sẵn để chọn nó. Rắn **tự tìm đường ngắn nhất** (BFS, thân là tường) tới waypoint đang là mục tiêu |
+| Chạm lên board (chế độ `CHƠI`) | Đặt waypoint mới; chạm vào waypoint có sẵn để chọn nó. Rắn đi **đúng route người chơi đặt**: mỗi đoạn là **ngang trước, dọc sau** (không BFS, không tự vòng qua thân) |
 | 4 phím mũi tên / `✕` | Dịch waypoint đang chọn 1 ô / xoá waypoint đó |
-| `AUTO` (giữa 4 mũi tên) | **Tự đặt waypoint an toàn**: lấy đường ngắn nhất đầu→quả (BFS, thân là tường), **mô phỏng ăn xong** rồi kiểm tra **vẫn còn đường bám đuôi**; chỉ khi qua mới đặt route (chỉ giữ **điểm gấp khúc** + quả). Không an toàn thì **tự chuyển sang route bám đuôi** để rắn không chết |
+| `AUTO` (giữa 4 mũi tên) | **Tạo waypoint theo đúng toggle đang bật**: `TAIL` → mô phỏng safe-search/bám đuôi; `BFS` → mô phỏng động cơ BFS đã kiểm chứng; `RND` → mô phỏng chu trình ngẫu nhiên; `SC` hoặc `ZZ` → mô phỏng chu trình mặc định với modifier đó. Nếu **không bật nút nào** thì chỉ lấy **đường ngắn nhất** tới quả. Chỉ thay route khi tìm được; nếu không, giữ nguyên route và báo dòng `AUTO ...: không tìm được route` ở thanh dưới |
 | `LIST` (đối xứng với `✕`) | Mở **hộp thoại danh sách waypoint**: mỗi dòng ghi số thứ tự + toạ độ ô; **kéo-thả dòng** để đổi thứ tự (thả tới đâu là chèn tới đó), chạm 1 dòng để chọn nó, chạm ra ngoài hoặc `✕` để đóng |
-| `PREVIEW (n)` (dưới cụm phím) | **Playback route hiện tại như video**: rắn thật **đứng yên**, một bóng rắn **xanh cyan** bò lại đúng các waypoint **đang có** (không lưu lịch sử cũ), có nhãn `PREVIEW i / n`; nút đổi thành **`THOÁT PREVIEW`** — bấm lần nữa hoặc chạm bất kỳ đâu là thoát và **chơi tiếp** đúng chỗ đang đứng |
-| `FOLLOW` (ô dưới-trái của cụm phím) | **Bám đuôi**: bấm 1 lần → *chờ chọn điểm* (chạm lên **một đốt trên thân rắn** để đặt điểm dừng); bấm lần nữa → chạy bám đuôi luôn. Rắn tự tìm đường (BFS) **chạy theo đuôi** và **luôn giữ khoảng cách ≥ 2 ô tới đuôi** (để lúc ăn quả, đuôi có dài ra thêm 1 đốt vẫn còn khoảng an toàn mà bám); dừng khi **đầu tới đúng điểm đã chọn**. Nút đổi thành **`STOP`** khi đang chạy |
+| `FOLLOW` (ô dưới-trái của cụm phím) | **Tạo route bám đuôi**: bấm `FOLLOW` → tạo waypoint theo path bám đuôi tới quả, chỉ nhận khi ăn xong vẫn còn đường tới đuôi; rắn **chưa chạy**, xem route rồi bấm `MOVE`. Khi FOLLOW vẫn bật và đi hết route, app **tự tạo route mới từ đầu hiện tại** (vẫn chờ `MOVE`). Bấm lần nữa (`STOP`) → **xoá toàn bộ waypoint** do FOLLOW tạo |
 | `MOVE` / `DỪNG` (thanh dưới) | Cho rắn chạy theo route / dừng lại để sửa |
-| `−` / `+` (góc dưới-phải) | **Tốc độ chạy**: mỗi lần bấm đổi 1 nấc `0.5× · 0.75× · 1× · 1.5× · 2× · 3×` (giữa hai nút hiện số hiện tại). Tốc độ chia tick interval nên áp dụng cho **cả chơi tay lẫn AI**, lưu lại cho lần mở sau |
-| `TAIL` / `BFS` / `SC` / `ZZ` / `RND` (hàng trên nút tốc độ) | `TAIL` = autoplay dùng **safe search / bám đuôi** (BFS tới quả, chỉ đi khi mô phỏng xong vẫn còn đường tới đuôi; không an toàn thì **chạy xa đuôi** để quét bàn theo zig-zag) — đo được **99% bàn, 0 chết** nhưng có thể xoay vòng ở cuối nên app **tự chơi lại sau 900 tick không ăn**; `BFS` = autoplay dùng **thuật toán đã kiểm chứng** (BFS đường ngắn nhất tới quả + mô phỏng cả thân rắn + **cổng chứng minh** giữ nguyên cung Hamilton; bàn lẻ × lẻ tự chuyển sang **planner đường Hamilton**) — bật/tắt sẽ chơi lại ván mới bằng động cơ đó; `SC` = **shortcut an toàn** (được bước vào ô đuôi đang bỏ đi); `ZZ` = **zig-zag / longer path** (bước ngắn từng ô thay vì nhảy dài, đường dài hơn — ý tưởng từ [chuyangliu/snake](https://github.com/chuyangliu/snake)); `RND` = autoplay dùng **chu trình Hamilton ngẫu nhiên** (divide-and-merge các dải, có validate) — bật/tắt sẽ chơi lại ngay trên chu trình mới. Ba nút `TAIL` / `BFS` / `RND` **loại trừ nhau**. **Toggle đang bật được áp dụng ngay lập tức** (TAIL/BFS/SC/ZZ đổi hành vi từ tick kế tiếp, RND đổi chu trình), và trạng thái được ghi vào `state.txt` (`tail=`, `bfs=`, `sc=`, `zz=`). Test `AI TOGGLES ARE LIVE` chứng minh `SC`/`ZZ` **thật sự đổi nước đi**; test `AI TOGGLES` + `WIN RATE` xác nhận mọi biến thể vẫn điền kín bàn, 0 cắn, 0 chết tường; test `SAFE SEARCH / TAIL CHASE` đo `TAIL` đạt 99% bàn với 0 chết |
-| Menu tạm dừng | `TIẾP TỤC` để chạy tiếp · **`AUTOPLAY`** = bật lại AI cho ván đang chơi (giữ điểm, kể cả khi bạn vừa chạm badge để điều khiển tay) · **`CHƠI LẠI`** = **chơi lại ván mới ngay tại chỗ** với đúng mode + đúng thuật toán (SC/ZZ/RND) đang chọn |
+| `DUMP` (ô dưới-phải của cụm phím) | Lưu **toàn bộ state hiện tại** ra `Android/data/com.dsh.snake/files/dump.txt` và một bản có timestamp `dump_yyyyMMdd_HHmmss.txt` (state, body, waypoint, toggle, mode, cờ follow, toạ độ nút, model/SDK...) để gửi kèm khi báo lỗi |
+| `CLEAR WP` (vùng trống phía trên `MOVE`, chỉ hiện khi có waypoint) | Xoá **toàn bộ waypoint**, dừng route và tắt route do FOLLOW tạo |
+| `CÀI ĐẶT` (màn hình chính hoặc menu tạm dừng) | Mở bảng cài đặt: chọn **tốc độ** `0.5× · 0.75× · 1× · 1.5× · 2× · 3×` và **thuật toán auto** (`TẮT` / `TAIL` / `BFS` / `SC` / `ZZ` / `RND`, chỉ một cái active). Tốc độ áp dụng cho cả chơi tay lẫn AI và được lưu lại; thuật toán áp dụng ngay khi có thể. |
+| `TAIL` / `BFS` / `SC` / `ZZ` / `RND` (trong `CÀI ĐẶT`) — **chỉ một nút active hoặc tắt hết** | `TAIL` = autoplay dùng **safe search / bám đuôi** (BFS tới quả, chỉ đi khi mô phỏng xong vẫn còn đường tới đuôi; không an toàn thì **chạy xa đuôi** để quét bàn theo zig-zag) — đo được **99% bàn, 0 chết** nhưng có thể xoay vòng ở cuối nên app **tự chơi lại sau 900 tick không ăn**; `BFS` = autoplay dùng **thuật toán đã kiểm chứng** (BFS đường ngắn nhất tới quả + mô phỏng cả thân rắn + **cổng chứng minh** giữ nguyên cung Hamilton; bàn lẻ × lẻ tự chuyển sang **planner đường Hamilton**) — bật/tắt chỉ đổi động cơ, **không reset ván**; `SC` = **shortcut an toàn** (được bước vào ô đuôi đang bỏ đi); `ZZ` = **zig-zag / longer path** (bước ngắn từng ô thay vì nhảy dài, đường dài hơn — ý tưởng từ [chuyangliu/snake](https://github.com/chuyangliu/snake)); `RND` = autoplay dùng **chu trình Hamilton ngẫu nhiên** (divide-and-merge các dải, có validate) — bật/tắt **không reset ván**: chu trình mới áp dụng ở ván kế tiếp nếu đang chạy. **Chỉ một** trong `TAIL` / `BFS` / `SC` / `ZZ` / `RND` được active; bật nút này tự tắt bốn nút kia. **Toggle đang bật được áp dụng ngay khi có thể** (TAIL/BFS/SC/ZZ đổi hành vi từ tick kế tiếp; RND đổi chu trình ở ván kế tiếp nếu thân rắn đang không nằm trên chu trình đó), và trạng thái được ghi vào `state.txt` (`tail=`, `bfs=`, `sc=`, `zz=`, `rnd=`, `followOn=`). Test `AI TOGGLES ARE LIVE` chứng minh `SC`/`ZZ` **thật sự đổi nước đi**; test `AI TOGGLES` + `WIN RATE` xác nhận mọi biến thể vẫn điền kín bàn, 0 cắn, 0 chết tường; test `SAFE SEARCH / TAIL CHASE` đo `TAIL` đạt 99% bàn với 0 chết |
+| Menu tạm dừng | Các nút xếp **dọc giống trang home**: `TIẾP TỤC` để chạy tiếp · **`AUTOPLAY`** = bật lại AI cho **ván đang chơi**, giữ nguyên điểm/body/fruit — kể cả ván bắt đầu bằng `CHƠI` hay vừa chạm badge để điều khiển tay; **không reset ván** · **`CHƠI LẠI`** = chơi lại ván mới ngay tại chỗ với đúng mode + thuật toán đang chọn · **`CÀI ĐẶT`** = mở bảng tốc độ + thuật toán |
 | Vuốt 4 hướng (chế độ AI) | Chuyển sang tự điều khiển (rắn đứng chờ waypoint) |
-| Chạm `CHƠI` / `AUTOPLAY` | Bắt đầu chơi tay (waypoint) hoặc để AI autoplay (2 nút xếp dọc) |
+| Chạm `CHƠI` / `AUTOPLAY` | Bắt đầu chơi tay (waypoint) hoặc để AI autoplay (2 nút xếp dọc, bên dưới là `CÀI ĐẶT`) |
 | Chạm `❚❚` (góc dưới phải) | Tạm dừng / tiếp tục |
-| Chạm khi thua | Chơi lại; menu có `CHƠI LẠI` · `AUTOPLAY` |
+| Chạm khi thua | Chỉ `CHƠI LẠI` / `AUTOPLAY` trên thẻ mới bắt đầu ván mới; chạm ra ngoài **không** còn tự reset |
 
 Cụm phím chỉnh waypoint nằm trong **dải điều khiển dưới grid** (không đè lên bàn chơi):
-`[[LIST] [▲] [✕]] / [[◀] [AUTO] [▶]] / [[FOLLOW] [▼]]` + nút `PREVIEW (n)` bên dưới,
-còn `MOVE` và nút tạm dừng ở bên phải dải này; dòng gợi ý + `Chết: N` ở trên cùng của dải.
+`[[LIST] [▲] [✕]] / [[◀] [AUTO] [▶]] / [[FOLLOW] [▼] [DUMP]]`; `MOVE` và nút tạm dừng ở
+bên phải dải này, `CLEAR WP` ở phía trên `MOVE`. Tốc độ và thuật toán đã chuyển vào
+`CÀI ĐẶT` (màn hình chính / menu tạm dừng), không còn nằm đè lên `MOVE`/pause.
+Dòng gợi ý + `Chết: N` ở trên cùng của dải. **Cả dải điều khiển này chỉ hiện khi đang
+chơi** (`STATE_RUNNING`); ở home và menu tạm dừng chỉ có các nút của menu.
 
 HUD hiện `ĐIỂM`, `KỶ LỤC`, badge tên chế độ AI, và thanh dưới có `Chết: N` — mỗi lần
 **cắn vào thân** (bị cắt đuôi) hay **đâm tường** đều +1 và đổi màu rắn.
+
+- **Âm thanh**: tiếng ăn quả, cắn thân, đâm tường, thắng, bấm nút, `MOVE`, `AUTO`… được tổng hợp thành PCM ngay trong app (không cần file asset) và phát qua `SoundPool`; âm thanh chỉ là trang trí nên lỗi audio không bao giờ làm hỏng ván.
 
 ## Kiểm tra nhanh (tuỳ chọn)
 

@@ -37,6 +37,7 @@ public final class PathPilotTest {
         testSmartVariants();
         testWinRate100();
         testTogglesAreLive();
+        testBodyOnCycle();
         testVerifiedWin();
         testProofGateMatters();
         testAppStepPolicy();
@@ -806,6 +807,19 @@ public final class PathPilotTest {
         System.out.printf("  SC off=%d  SC on=%d  ZZ on=%d%n", a, b, c);
         check("SC toggle changes the play", a != b);
         check("ZZ toggle changes the play", b != c);
+    }
+
+    /** RND may only switch engines mid-run when the live body is on that cycle. */
+    private static void testBodyOnCycle() {
+        AutoPilot p = new AutoPilot(20, 12, false, false);
+        int[] fresh = p.initialBody(4);
+        check("RND switch: a fresh body is contiguous on the cycle", p.bodyOnCycle(fresh));
+        int[] reversed = new int[]{fresh[1], fresh[0]};
+        check("RND switch: a body in the wrong direction is rejected",
+                !p.bodyOnCycle(reversed));
+        int other = (fresh[0] + 1) % (20 * 12);
+        check("RND switch: an unrelated neighbour is rejected",
+                !p.bodyOnCycle(new int[]{fresh[0], other}));
     }
 
     /**

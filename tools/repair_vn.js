@@ -53,7 +53,7 @@ const fixes = [
     'drawSecondaryButton(c, autoRestartBtn, "TỰ ĐỘNG", false);'],
 
   [/c\.drawText\("[^"]*", cx, by \+ bh \+ dp\(26f\),/g,
-    'c.drawText("hoặc chạm ra ngoài để chơi lại", cx, by + bh + dp(26f),'],
+    'c.drawText("chọn CHƠI LẠI / AUTOPLAY để chơi ván mới", cx, by + bh + dp(26f),'],
 ];
 
 let applied = 0;

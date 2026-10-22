@@ -848,6 +848,28 @@ final class AutoPilot {
         return dirTo(headCell, next);
     }
 
+    /**
+     * True when {@code body} (head first) is a contiguous run on this pilot's cycle.
+     * A cycle engine may only be switched on under a live snake when this holds:
+     * otherwise the body would no longer follow the cycle and the engine would be
+     * driving blind. RND uses it to decide whether the run must keep the previous
+     * engine until the next (explicitly started) run.
+     */
+    boolean bodyOnCycle(int[] body) {
+        if (oddMode || body == null || body.length == 0) {
+            return false;
+        }
+        for (int i = 1; i < body.length; i++) {
+            // The body is laid out backwards along the cycle: body[i] is the cell
+            // right before body[i - 1], so it must be that cell's cycle predecessor.
+            int prev = ((cycleIdx[body[i - 1]] - 1) % total + total) % total;
+            if (cycleCell[prev] != body[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** Free cells still ahead of the head on the cycle (diagnostics). */
     int arcSize(int[] body) {
         if (body.length == 0) {

@@ -129,24 +129,33 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private final RectF padDelBtn = new RectF();
     private final RectF padAutoBtn = new RectF();
     private final RectF padListBtn = new RectF();
-    private final RectF padReplayBtn = new RectF();
     private final RectF padFollowBtn = new RectF();
+    private final RectF dumpBtn = new RectF();
+    private final RectF clearBtn = new RectF();
+
+    /* --- settings screen: speed + algorithm, opened from home / pause --- */
+    private boolean settingsOpen;
+    private final RectF settingsBtn = new RectF();
+    private final RectF settingsPanel = new RectF();
+    private final RectF settingsCloseBtn = new RectF();
+    private final RectF[] settingsSpeedBtn = new RectF[SPEEDS.length];
+    private final RectF[] settingsAlgoBtn = new RectF[6];
+    private float settingsAlgoLabelY;
+    private Paint settingsDimPaint;
+
+    private static final int ALG_OFF = 0;
+    private static final int ALG_TAIL = 1;
+    private static final int ALG_BFS = 2;
+    private static final int ALG_SC = 3;
+    private static final int ALG_ZZ = 4;
+    private static final int ALG_RND = 5;
+    private static final String[] ALGO_LABELS = {"TẮT", "TAIL", "BFS", "SC", "ZZ", "RND"};
+    private static final String[] SPEED_LABELS = {"0.5×", "0.75×", "1×", "1.5×", "2×", "3×"};
     private final RectF padPanel = new RectF();
-    private final RectF speedMinusBtn = new RectF();
-    private final RectF speedPlusBtn = new RectF();
-    private final RectF smartBtn = new RectF();
-    private final RectF zigBtn = new RectF();
-    private final RectF rndBtn = new RectF();
-    /** New algorithm button: BFS-to-fruit + full-snake simulation + formal proof. */
-    private final RectF bfsBtn = new RectF();
-    /** Safe-search button: greedy BFS + tail chasing (no Hamiltonian cycle). */
-    private final RectF tailBtn = new RectF();
     private final RectF resetBtn = new RectF();
 
-    /* --- manual FOLLOW: walk along the body / follow the tail ---------- */
-    private boolean followPicking;
-    private boolean following;
-    private int followStop = -1;
+    /* --- FOLLOW: generated waypoint route following the tail to fruit -- */
+    private boolean followRouteActive;
 
     /* --- drag & drop waypoint list dialog ------------------------------ */
     private boolean wpListOpen;
@@ -157,12 +166,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private final RectF listPanel = new RectF();
     private final RectF listCloseBtn = new RectF();
 
-    /* --- replay playback (like a video player) ------------------------- */
-    private boolean replayMode;
-    private int[] replayPath = new int[0];
-    private int replayPos;
-    private float replayAccum;
-    private static final float REPLAY_STEP_MS = 55f;
     private final RectF autoBadge = new RectF();
     private final RectF tmpRect = new RectF();
     private float pauseCx;
@@ -172,6 +175,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private float hudH;
     private float bottomH;
     private float hintTop;
+    /** Short-lived message shown in the bottom hint line (AUTO route result). */
+    private volatile String noticeText = "";
+    private volatile long noticeUntilMs;
+    private volatile boolean noticeError;
     /** Index into SPEEDS: the runner divides the tick interval by it. */
     private int speedIndex = 2;
     /** AI toggle: safe shortcuts that may leave the Hamiltonian cycle. */
@@ -186,7 +193,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int foodCell = -1;
     /** Current body cells, head first: the chain the renderer draws. */
     private int[] curCells = new int[0];
-    /** Manual planning pause / replay: no step is coming, so the drawing is settled. */
+    /** Manual planning pause: no step is coming, so the drawing is settled. */
     private boolean planPaused;
     /** Head rotation: from the angle of the last cell move to the angle of this one. */
     private float headAngleFrom;
@@ -223,6 +230,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private AutoPilot randomPilot;
     /** RND toggle: autoplay uses the random cycle instead of the fixed snake. */
     private boolean randomCycleOn;
+    /** RND was selected under a live snake not on its cycle: apply it on the next run. */
+    private boolean rndCyclePending;
+    /** Engine kept running until the pending RND cycle can be applied on a fresh run. */
+    private AutoPilot rndFallbackPilot;
     /** BFS toggle: autoplay uses the verified BFS + simulation engine instead. */
     private boolean bfsOn;
     /** The verified ("guaranteed") pilot: BFS to the fruit, whole-snake simulation. */
@@ -320,9 +331,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private Paint listTitlePaint;
     private Paint listCardPaint;
     private Paint listCardStroke;
-    private Paint replayBodyPaint;
-    private Paint replayHeadPaint;
-    private Paint replayLabelPaint;
+
     private Paint ghostBodyPaint;
     private Paint ghostHeadPaint;
 
@@ -337,6 +346,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private Shader greenShader;
     private float greenShaderTop = Float.NaN;
     private float greenShaderBottom = Float.NaN;
+    private SoundFx sound;
 
     public GameView(Context context) {
         super(context);
@@ -352,8 +362,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         speedIndex = Math.max(0, Math.min(SPEEDS.length - 1,
                 context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                         .getInt(KEY_SPEED, 2)));
+        for (int i = 0; i < settingsSpeedBtn.length; i++) {
+            settingsSpeedBtn[i] = new RectF();
+        }
+        for (int i = 0; i < settingsAlgoBtn.length; i++) {
+            settingsAlgoBtn[i] = new RectF();
+        }
 
         buildPaints();
+        try {
+            sound = new SoundFx(context);
+        } catch (Throwable ignored) {
+            sound = null;   // sound is cosmetic: never block the game on audio
+        }
         resetBoardState();
     }
 
@@ -499,6 +520,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         dimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         dimPaint.setColor(0x5C000000);
+        settingsDimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        settingsDimPaint.setColor(0xB3000000);
+
 
         cardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         cardPaint.setColor(0xF2131F35);
@@ -669,19 +693,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         listCardStroke.setStrokeWidth(dp(1.4f));
         listCardStroke.setColor(0xFF35507F);
 
-        // Replay playback: translucent cyan snake walking the recorded route.
-        replayBodyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        replayBodyPaint.setStyle(Paint.Style.STROKE);
-        replayBodyPaint.setColor(0xB37FE7FF);
-        replayBodyPaint.setStrokeCap(Paint.Cap.ROUND);
-        replayBodyPaint.setStrokeJoin(Paint.Join.ROUND);
-        replayHeadPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        replayHeadPaint.setColor(0xE67FE7FF);
-        replayLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        replayLabelPaint.setTypeface(bold);
-        replayLabelPaint.setTextSize(dp(10f));
-        replayLabelPaint.setColor(0xFFBFF4FF);
-        replayLabelPaint.setTextAlign(Paint.Align.CENTER);
 
         // Faint orange ghost of the whole snake at the selected waypoint, so the
         // player can see where the head and the tail would be.
@@ -739,6 +750,23 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         headGlowPaint.setShader(new RadialGradient(0f, 0f, hr * 2.3f,
                 new int[]{Color.argb(0x4D, Color.red(c), Color.green(c), Color.blue(c)),
                         0x00000000}, null, Shader.TileMode.CLAMP));
+        // The ghost snake shows where the selected waypoint would put the body, and
+        // it is drawn over the real snake. Use the complementary hue of the current
+        // snake so the two can never share the same colour (the old fixed orange
+        // disappeared when the snake itself cycled to orange/yellow).
+        ghostBodyPaint.setColor(ghostColorFor(c, 0x73));
+        ghostHeadPaint.setColor(ghostColorFor(c, 0xAA));
+    }
+
+    /** Ghost colour: complementary hue, vivid and translucent. */
+    private static int ghostColorFor(int snake, int alpha) {
+        float[] hsv = new float[3];
+        Color.colorToHSV(snake, hsv);
+        hsv[0] = (hsv[0] + 180f) % 360f;
+        hsv[1] = Math.max(0.68f, Math.min(1f, hsv[1]));
+        hsv[2] = 1f;
+        int rgb = Color.HSVToColor(hsv);
+        return Color.argb(alpha, Color.red(rgb), Color.green(rgb), Color.blue(rgb));
     }
 
     /** Caches the static scene (background, glow, board, grid) into a bitmap. */
@@ -815,14 +843,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             return;
         }
         float margin = dp(13f);
-        // Dedicated control strip under the grid: waypoint pad + PREVIEW row and
-        // the MOVE / pause buttons. Reserving it always keeps the grid size
-        // stable when the player switches modes.
+        // Dedicated control strip under the grid: waypoint pad and the MOVE /
+        // pause buttons. Reserving it always keeps the grid size stable when the
+        // player switches modes.
         float pb = dp(40f);
         float pg = dp(6f);
-        float padW = pb * 3f + pg * 2f;
         float padH = pb * 3f + pg * 2f;
-        bottomH = dp(18f) + padH + dp(8f) + dp(32f) + dp(8f);
+        bottomH = dp(18f) + padH + dp(8f);
         float cut = safeTop();
         float pillsH = dp(52f);
         // HUD pills live in the top strip (left/right of the camera cutout) and
@@ -873,7 +900,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         // --- control strip (outside the grid) -----------------------------
         float ctrlTop = boardRect.bottom + dp(6f);
-        float replayH = dp(32f);
         float padL = boardLeft;
         float padT = ctrlTop + dp(16f);
         padPanel.set(padL - dp(4f), ctrlTop - dp(2f), boardRect.right + dp(4f),
@@ -903,34 +929,18 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         padAutoBtn.set(padL + pb + pg, padT + pb + pg,
                 padL + pb * 2f + pg, padT + pb * 2f + pg);
         padListBtn.set(padL, padT, padL + pb, padT + pb);
-        // FOLLOW lives in the bottom-left cell of the pad.
+        // FOLLOW lives in the bottom-left cell of the pad; DUMP fills the empty
+        // bottom-right cell so it is always reachable without covering the board.
         padFollowBtn.set(padL, padT + 2f * (pb + pg), padL + pb,
                 padT + 3f * pb + 2f * pg);
-        // PREVIEW sits under the pad, still inside the control strip.
-        float replayTop = padT + padH + dp(8f);
-        padReplayBtn.set(padL, replayTop, padL + padW, replayTop + replayH);
-        // Speed − / + sit in the free bottom-right corner of the strip (the pad and
-        // the PREVIEW row are on the left, the MOVE pill and pause above them).
-        float sp = dp(36f);
-        float spBottom = h - dp(6f);
-        speedPlusBtn.set(boardRect.right - sp, spBottom - sp, boardRect.right, spBottom);
-        speedMinusBtn.set(boardRect.right - 2f * sp - dp(52f), spBottom - sp,
-                boardRect.right - sp - dp(52f), spBottom);
-        // AI toggles above the speed buttons: RST (restart this run), SC (safe
-        // shortcuts), ZZ (zig-zag longer path), RND (random cycle, restart).
-        float tb = dp(30f);
-        float tRight = boardRect.right;
-        float tBottom = spBottom - sp - dp(8f);
-        rndBtn.set(tRight - tb, tBottom - tb, tRight, tBottom);
-        zigBtn.set(tRight - 2f * tb - dp(6f), tBottom - tb, tRight - tb - dp(6f), tBottom);
-        smartBtn.set(tRight - 3f * tb - dp(12f), tBottom - tb,
-                tRight - 2f * tb - dp(12f), tBottom);
-        // BFS button, left of SC: the verified algorithm (shortest proven-safe path).
-        bfsBtn.set(tRight - 4f * tb - dp(18f), tBottom - tb,
-                tRight - 3f * tb - dp(18f), tBottom);
-        // TAIL button, left of BFS: safe search with tail chasing (no cycle).
-        tailBtn.set(tRight - 5f * tb - dp(24f), tBottom - tb,
-                tRight - 4f * tb - dp(24f), tBottom);
+        dumpBtn.set(padL + 2f * (pb + pg), padT + 2f * (pb + pg),
+                padL + 3f * pb + 2f * pg, padT + 3f * pb + 2f * pg);
+        // CLEAR WP lives in the free area above MOVE / pause and only appears
+        // while a route exists.
+        float clearW = dp(96f);
+        float clearH = dp(32f);
+        float clearX = padL + 3f * pb + 2f * pg + dp(12f);
+        clearBtn.set(clearX, padT, clearX + clearW, padT + clearH);
         resetBtn.setEmpty();   // restart lives in the pause menu now
 
         rebuildShaders();
@@ -1024,6 +1034,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     public void release() {
         saveHighScore();
         stopLoop();
+        if (sound != null) {
+            sound.release();
+            sound = null;
+        }
         if (staticBmp != null) {
             staticBmp.recycle();
             staticBmp = null;
@@ -1110,6 +1124,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      */
     private AutoPilot activePilot() {
         if (mode == MODE_AUTO) {
+            if (randomCycleOn && randomPilot != null && !rndCyclePending) {
+                // RND: the body is already walking this pilot's cycle, so switching
+                // the engine under the live snake is safe.
+                return randomPilot;
+            }
             if (tailChaseOn && tailPilot != null) {
                 // TAIL button: safe search - greedy BFS to the fruit while the tail stays
                 // reachable, otherwise run away from the tail (zig-zag sweep).
@@ -1120,7 +1139,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 // the whole snake; cycle walk when the shortcut is not proven safe).
                 return bfsPilot;
             }
-            return randomCycleOn && randomPilot != null ? randomPilot : pilot;
+            if (rndCyclePending && rndFallbackPilot != null) {
+                // RND was selected mid-run: keep the engine that matches the live body
+                // until the new random cycle can be built on a fresh run.
+                return rndFallbackPilot;
+            }
+            return pilot;
         }
         return null;
     }
@@ -1156,9 +1180,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
      * (used by the pause menu's CHƠI LẠI button).
      */
     private void restartRun() {
-        if (randomCycleOn && randomPilot != null && mode == MODE_AUTO) {
-            randomPilot.reshuffleRandomMerge();
-        }
         applyAiToggles();
         restartGame(mode);
         haptic(true);
@@ -1187,17 +1208,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         return SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, speedIndex))];
     }
 
-    /** − / + button: one step slower / faster, persisted for the next launch. */
-    private void changeSpeed(int delta) {
-        int next = Math.max(0, Math.min(SPEEDS.length - 1, speedIndex + delta));
-        if (next == speedIndex) {
-            return;
-        }
-        speedIndex = next;
-        getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putInt(KEY_SPEED, speedIndex).apply();
-        haptic(false);
-    }
 
     private float interval() {
         return currentInterval;
@@ -1316,8 +1326,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             clearRoute();
             // The toggles are global: whatever is active is applied to the new run.
             applyAiToggles();
+            rndCyclePending = false;
+            rndFallbackPilot = null;
             if (newMode == MODE_AUTO && randomCycleOn && randomPilot != null) {
-                // RND toggle: every run gets a fresh random cycle.
+                // RND toggle: every new run gets a fresh random cycle.
                 randomPilot.reshuffleRandomMerge();
             }
             if (autoMode) {
@@ -1328,6 +1340,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             dirQueue.clear();
             clearEatLog();
             lastEatMs = 0L;
+            clearOverlayButtons();
+            if (sound != null) {
+                sound.playStart();
+            }
         }
     }
 
@@ -1335,16 +1351,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         mode = newMode;
         autoMode = newMode != MODE_MANUAL;
         lastAutoMode = autoMode ? newMode : -1;
+        rndCyclePending = false;
+        rndFallbackPilot = null;
         if (newMode == MODE_AUTO && randomCycleOn && randomPilot != null) {
             randomPilot.reshuffleRandomMerge();
         }
         resetBoardState();
         state = STATE_RUNNING;
-        mode = newMode;
-        autoMode = newMode != MODE_MANUAL;
         tickAccum = -520f;
         clearEatLog();
         lastEatMs = 0L;
+        clearOverlayButtons();
+        if (sound != null) {
+            sound.playStart();
+        }
     }
 
     /** Clears the safe-search stall counter (new run / mode change). */
@@ -1356,6 +1376,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (state == STATE_RUNNING) {
             state = STATE_PAUSED;
             saveHighScore();
+            if (sound != null) {
+                sound.playTap();
+            }
         }
     }
 
@@ -1363,31 +1386,47 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (state == STATE_PAUSED) {
             state = STATE_RUNNING;
             tickAccum = Math.min(tickAccum, 0f);
+            clearOverlayButtons();
+            if (sound != null) {
+                sound.playTap();
+            }
         }
     }
 
     /**
-     * Pause-menu mode button: continue the current run with that AI. If the mode
-     * is already active it simply resumes; if the player took over by hand the AI
-     * of that mode is switched back on for the same run. Another mode restarts.
+     * Drops the hit-boxes of menu buttons that are no longer on screen. Without
+     * this, the pause menu's CHƠI LẠI rectangle stayed alive after resuming and a
+     * later tap on the board at that spot restarted the run out of nowhere.
+     */
+    private void clearOverlayButtons() {
+        startBtn.setEmpty();
+        autoBtn.setEmpty();
+        resumeBtn.setEmpty();
+        autoResumeBtn.setEmpty();
+        resetBtn.setEmpty();
+        restartBtn.setEmpty();
+        autoRestartBtn.setEmpty();
+        settingsBtn.setEmpty();
+    }
+
+    /**
+     * Pause-menu AUTOPLAY: continue the current run with the AI, even when the run
+     * was started in manual mode. It must never restart the run; the body, score and
+     * fruit stay exactly where they are.
      */
     private void resumeMode(int targetMode) {
         if (mode == targetMode && autoMode) {
             resumeGame();
             return;
         }
-        if (lastAutoMode == targetMode || mode == targetMode) {
-            mode = targetMode;
-            autoMode = true;
-            manualMoving = false;
-            following = false;
-            followPicking = false;
-            dirQueue.clear();
-            resumeGame();
-            haptic(false);
-            return;
-        }
-        restartGame(targetMode);
+        mode = targetMode;
+        autoMode = true;
+        lastAutoMode = targetMode;
+        manualMoving = false;
+        dirQueue.clear();
+        applyAiToggles();
+        resumeGame();
+        haptic(false);
     }
 
     private void update(float dt) {
@@ -1397,16 +1436,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         dumpState();
 
         if (state == STATE_RUNNING) {
-            boolean planPause = replayMode
-                    || (!autoMode && mode == MODE_MANUAL && !manualMoving && !following);
+            boolean planPause = !autoMode && mode == MODE_MANUAL && !manualMoving;
             if (planPause) {
-                // Waiting for waypoints / watching the replay: nothing moves, and the
-                // drawing must not stay frozen half-way through the last step.
+                // Waiting for waypoints: nothing moves, and the drawing must not stay
+                // frozen half-way through the last step.
                 planPaused = true;
                 hasNext = false;     // no step is coming: stop leading the head
                 aimStoppedHead();
                 tickAccum = 0f;
-                updateReplay(dt);
             } else {
                 planPaused = false;
                 foodTimer += dt;
@@ -1468,9 +1505,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void step() {
         if (!autoMode && mode == MODE_MANUAL) {
-            boolean moved = following ? stepFollow() : stepManualPath();
+            boolean moved = stepManualPath();
             if (!moved) {
-                // No route / following finished: the snake waits for the player.
+                // No route left: the snake waits for the player.
                 return;
             }
         }
@@ -1588,6 +1625,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             spawnFood();
             spawnEatFx(nx, ny);
             popups.add(new Popup(nx, ny));
+            if (sound != null) {
+                sound.playEat();
+            }
             haptic(false);
             logLine("EAT head=" + ni + " prevHead=" + head + " tail=" + body.peekLast()
                     + " tailBefore=" + tailBefore + " len=" + body.size());
@@ -1608,8 +1648,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private void predictNext() {
         hasNext = false;
         if (state != STATE_RUNNING || planPaused || body.isEmpty()) {
-            // Nothing is going to move (waiting for a waypoint / replay): the drawing
-            // stays exactly on the real cells.
+            // Nothing is going to move (waiting for a waypoint): the drawing stays
+            // exactly on the real cells.
             return;
         }
         Integer headObj = body.peekFirst();
@@ -1699,19 +1739,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             if (idx >= waypoints.size()) {
                 return null;
             }
-            int[] path = findPathTo(cellsToArray(), waypoints.get(idx));
-            if (path == null || path.length <= 1) {
+            int nxt = directStepCell(head, waypoints.get(idx));
+            if (nxt < 0) {
                 return null;
             }
-            int nxt = path[1];
             return new int[]{Integer.compare(nxt % COLS, hx),
                     Integer.compare(nxt / COLS, hy)};
         }
-        if (following) {
-            // FOLLOW steers by its own tail logic; predicting it exactly is not worth
-            // it, a straight guess is dropped as soon as the step differs.
-            return new int[]{dirX, dirY};
-        }
+
         int[] q = dirQueue.peekFirst();
         if (q != null && !(q[0] == -dirX && q[1] == -dirY)) {
             return new int[]{q[0], q[1]};
@@ -1791,139 +1826,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     /* Manual mode: waypoint route                                        */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Walks the planned route. Returns false when the snake must not move (no
-     * waypoints left or movement not started), so the player can keep editing.
-     */
-    /**
-     * FOLLOW: walk a path towards the snake's own tail (the tail keeps moving,
-     * so this is always safe). Stops when the head reaches the body point the
-     * player picked, when the tail cannot be reached any more, or on request.
-     */
-    private boolean stepFollow() {
-        Integer headObj = body.peekFirst();
-        if (headObj == null || body.size() < 2) {
-            following = false;
-            return false;
-        }
-        int head = headObj;
-        if (followStop >= 0 && head == followStop) {
-            following = false;
-            followStop = -1;
-            tickAccum = 0f;
-            haptic(true);
-            return false;
-        }
-        int tail = body.peekLast();
-        // Steer straight to the picked point once it is free again.
-        if (followStop >= 0 && followStop != tail && !body.contains(followStop)) {
-            int[] toStop = findPathTo(cellsToArray(), followStop);
-            if (toStop != null && toStop.length >= 2) {
-                int next = toStop[1];
-                dirX = (next % COLS) - (head % COLS);
-                dirY = (next / COLS) - (head / COLS);
-                return true;
-            }
-        }
-        // Otherwise keep chasing the tail but keep a safe gap. Every candidate is
-        // verified on the body it would produce: build the post-move snake, BFS to
-        // its tail and require the distance to stay >= 2. That way a turn can
-        // never cut the follow path off.
-        int[] cellsNow = cellsToArray();
-        int hx = head % COLS;
-        int hy = head / COLS;
-        int bestK = -1;
-        int bestD = Integer.MAX_VALUE;
-        int fallbackK = -1;
-        int fallbackD = -1;
-        for (int k = 0; k < 4; k++) {
-            int nx = hx + NEIGH[k][0];
-            int ny = hy + NEIGH[k][1];
-            if (nx < 0 || nx >= COLS || ny < 0 || ny >= rows) {
-                continue;
-            }
-            int n = ny * COLS + nx;
-            if (body.contains(n) && n != tail) {
-                continue;
-            }
-            int d = tailDistanceAfterMove(cellsNow, n);
-            if (d < 0) {
-                continue;
-            }
-            if (d >= 2 && d < bestD) {
-                bestD = d;
-                bestK = k;
-            }
-            if (d > fallbackD) {
-                fallbackD = d;
-                fallbackK = k;
-            }
-        }
-        int pick = bestK >= 0 ? bestK : fallbackK;
-        if (pick < 0) {
-            following = false;
-            tickAccum = 0f;
-            return false;
-        }
-        dirX = NEIGH[pick][0];
-        dirY = NEIGH[pick][1];
-        return true;
-    }
-
-    /**
-     * Distance from the tail to {@code newHead} after moving there, on the body
-     * that move would produce (the tail advances one cell). -1 when unreachable.
-     */
-    private int tailDistanceAfterMove(int[] cells, int newHead) {
-        int n = cells.length;
-        if (n < 2) {
-            return -1;
-        }
-        int[] sim = new int[n];
-        sim[0] = newHead;
-        for (int i = 0; i < n - 1; i++) {
-            sim[i + 1] = cells[i];
-        }
-        int total = COLS * rows;
-        boolean[] occ = new boolean[total];
-        for (int c : sim) {
-            occ[c] = true;
-        }
-        int start = sim[n - 1];      // tail
-        int target = sim[0];         // head
-        occ[target] = false;
-        occ[start] = false;
-        int[] dist = new int[total];
-        java.util.Arrays.fill(dist, -1);
-        int[] queue = new int[total];
-        int qh = 0;
-        int qt = 0;
-        dist[start] = 0;
-        queue[qt++] = start;
-        while (qh < qt) {
-            int cur = queue[qh++];
-            if (cur == target) {
-                return dist[cur];
-            }
-            int cx = cur % COLS;
-            int cy = cur / COLS;
-            for (int k = 0; k < 4; k++) {
-                int nx = cx + NEIGH[k][0];
-                int ny = cy + NEIGH[k][1];
-                if (nx < 0 || nx >= COLS || ny < 0 || ny >= rows) {
-                    continue;
-                }
-                int c = ny * COLS + nx;
-                if (occ[c] || dist[c] >= 0) {
-                    continue;
-                }
-                dist[c] = dist[cur] + 1;
-                queue[qt++] = c;
-            }
-        }
-        return -1;
-    }
-
     /** BFS distance from the tail over free cells (the body is a wall). */
     private int[] distFromTail() {
         int total = COLS * rows;
@@ -1966,6 +1868,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         return dist;
     }
 
+    /** Follows the player's waypoint route one cell per tick. */
     private boolean stepManualPath() {
         if (!manualMoving || waypoints.isEmpty()) {
             return false;
@@ -1985,25 +1888,28 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         if (waypoints.isEmpty()) {
             manualMoving = false;
+            // FOLLOW stays active: after MOVE finishes the current route, build the
+            // next route from the head's current cell (the player still presses MOVE).
+            if (followRouteActive) {
+                followRouteToFruit();
+            }
             return false;
         }
         int target = waypoints.get(0);
         int hx = head % COLS;
         int hy = head / COLS;
-        // Auto path: the same shortest-path search the AI modes use, so a waypoint
-        // tap is enough - the snake finds its own way around its body instead of
-        // walking the stair-step line straight into it.
-        int[] path = findPathTo(cellsToArray(), target);
-        if (path != null && path.length > 1) {
-            int nxt = path[1];
-            dirX = Integer.compare(nxt % COLS, hx);
-            dirY = Integer.compare(nxt / COLS, hy);
-            return true;
+        // Follow the player's own L-shaped route. There is no BFS detour any more:
+        // the snake goes where the waypoints tell it to go, one cell per tick. If the
+        // next cell is the body, the normal step rules do their job (the tail cell is
+        // free to enter; a real self-bite cuts the body instead of stalling MOVE).
+        int nxt = directStepCell(head, target);
+        if (nxt < 0) {
+            manualMoving = false;
+            return false;
         }
-        // No way through right now (the target is sealed in). Stop the run so the
-        // player can fix the order instead of ramming the body.
-        manualMoving = false;
-        return false;
+        dirX = Integer.compare(nxt % COLS, hx);
+        dirY = Integer.compare(nxt / COLS, hy);
+        return true;
     }
 
     private int cellAt(float x, float y) {
@@ -2020,18 +1926,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     /** Manual mode taps: waypoints, the arrow pad and the MOVE button. */
     private void handleManualTap(float x, float y) {
-        if (replayMode) {
-            // Any tap leaves the playback; the REPLAY button toggles it off too.
-            if (!padReplayBtn.contains(x, y)) {
-                stopReplay();
-            } else {
-                replayRoute();
-            }
-            return;
-        }
         if (moveBtn.contains(x, y)) {
             if (manualMoving) {
                 manualMoving = false;
+                if (sound != null) {
+                    sound.playTap();
+                }
             } else if (!waypoints.isEmpty()) {
                 manualMoving = true;
                 tickAccum = -120f;
@@ -2041,6 +1941,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 // old way and the capsule would flip only afterwards.
                 planPaused = false;
                 predictNext();
+                if (sound != null) {
+                    sound.playMove();
+                }
             }
             return;
         }
@@ -2062,28 +1965,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             haptic(false);
             return;
         }
-        // REPLAY: walk the whole waypoint history again.
-        if (padReplayBtn.contains(x, y)) {
-            replayRoute();
-            return;
-        }
-        // FOLLOW: pick a body cell to stop at, then run along the tail.
+        // FOLLOW: generate a tail-following waypoint route to a safe fruit, or
+        // remove the route generated by the previous FOLLOW tap.
         if (padFollowBtn.contains(x, y)) {
-            if (following) {
-                following = false;
-                followPicking = false;
-                followStop = -1;
-            } else if (followPicking) {
-                following = true;
-                followPicking = false;
-                followStop = -1;
-                manualMoving = false;
-                tickAccum = -120f;
+            if (followRouteActive) {
+                clearFollowRoute();
             } else {
-                followPicking = true;
-                followStop = -1;
+                followRouteToFruit();
             }
-            haptic(false);
             return;
         }
         if (selectedWp >= 0 && selectedWp < waypoints.size()) {
@@ -2112,18 +2001,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (c < 0) {
             return;
         }
-        // FOLLOW: tapping a body cell chooses (or moves) the stop point.
-        if (followPicking || following) {
-            if (body.contains(c)) {
-                followStop = c;
-                following = true;
-                followPicking = false;
-                manualMoving = false;
-                tickAccum = -120f;
-                haptic(false);
-            }
-            return;
-        }
+
         for (int i = 0; i < waypoints.size(); i++) {
             if (waypoints.get(i) == c) {
                 selectedWp = i;
@@ -2306,39 +2184,259 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     /**
-     * AUTO: replaces the route with waypoints along the shortest path from the
-     * head to the fruit (only the corners are kept, so the L-shaped route between
-     * two waypoints is exactly the shortest path).
+     * AUTO: creates a route to the fruit with the autoplay engine currently selected
+     * by TAIL / BFS / RND (SC / ZZ are applied to those engines). With no engine
+     * selected it falls back to the plain BFS shortest path. Only the corners are
+     * kept, so the L-shaped manual route follows the planned path exactly.
      */
     private void autoRouteToFruit() {
         if (body.isEmpty() || foodCell < 0) {
+            autoRouteFailed("AUTO: không có quả để tới");
             return;
         }
-        int[] path = findPathTo(cellsToArray(), foodCell);
-        if (path == null || path.length < 2) {
-            haptic(true);
-            return;
-        }
-        // Only accept the fruit route when the snake can still follow its tail
-        // after eating it; otherwise fall back to a route that follows the tail.
-        ArrayList<Integer> route = toList(path);
-        int[] wps = safeRouteCorners(route);
-        if (wps == null) {
-            int[] tailPath = findPathTo(cellsToArray(), body.peekLast());
-            if (tailPath != null && tailPath.length >= 2) {
-                wps = routeCorners(toList(tailPath));
+        applyAiToggles();
+        AutoPilot planner = autoRoutePilot();
+        String engine = autoRouteEngineName();
+        if (planner == null) {
+            // No TAIL / BFS / RND selected: plain shortest path, as requested.
+            int[] path = findPathTo(cellsToArray(), foodCell);
+            if (path == null || path.length < 2) {
+                autoRouteFailed(autoRoutePrefix(engine) + ": không tìm được đường tới quả");
+                return;
             }
+            int[] wps = routeCorners(toList(path));
+            if (wps == null || wps.length == 0) {
+                autoRouteFailed(autoRoutePrefix(engine) + ": không tìm được đường tới quả");
+                return;
+            }
+            setAutoRoute(wps, engine);
+            return;
         }
+        // Let the selected engine drive a virtual snake to the fruit. TAIL / BFS /
+        // RND keep their own safety rules, and SC / ZZ were pushed into the pilots
+        // by applyAiToggles().
+        int[] path = simulatePilotPath(planner, Math.max(1200, COLS * rows * 2));
+        if (path == null || path.length < 2) {
+            autoRouteFailed(autoRoutePrefix(engine) + ": không tìm được route");
+            return;
+        }
+        int[] wps = safeRouteCorners(toList(path));
         if (wps == null || wps.length == 0) {
-            haptic(true);
+            autoRouteFailed(autoRoutePrefix(engine) + ": route không còn đường bám đuôi");
+            return;
+        }
+        setAutoRoute(wps, engine);
+    }
+
+    /** Engine selected by TAIL / BFS / RND, or null for the plain shortest path. */
+    private AutoPilot autoRoutePilot() {
+        if (tailChaseOn && tailPilot != null) {
+            return tailPilot;
+        }
+        if (bfsOn && bfsPilot != null) {
+            return bfsPilot;
+        }
+        if (randomCycleOn && randomPilot != null) {
+            return randomPilot;
+        }
+        if ((smartShortcuts || zigzagOn) && pilot != null) {
+            // SC / ZZ are modifiers of the default Hamiltonian-cycle engine.
+            return pilot;
+        }
+        return null;
+    }
+
+    private String autoRouteEngineName() {
+        if (tailChaseOn) {
+            return "TAIL";
+        }
+        if (bfsOn) {
+            return "BFS";
+        }
+        if (randomCycleOn) {
+            return "RND";
+        }
+        if (smartShortcuts) {
+            return "SC";
+        }
+        if (zigzagOn) {
+            return "ZZ";
+        }
+        return "";
+    }
+
+    private String autoRoutePrefix(String engine) {
+        return engine.length() == 0 ? "AUTO (ngắn nhất)" : "AUTO " + engine;
+    }
+
+    private void setAutoRoute(int[] wps, String engine) {
+        followRouteActive = false;
+        waypoints.clear();
+        for (int c : wps) {
+            waypoints.add(c);
+        }
+        selectedWp = 0;
+        logLine("AUTO engine=" + (engine.length() == 0 ? "SHORTEST" : engine)
+                + " wps=" + wps.length + " food=" + foodCell + " len=" + body.size());
+        showNotice(autoRoutePrefix(engine) + ": " + wps.length + " waypoint tới quả", false);
+        if (sound != null) {
+            sound.playAuto();
+        }
+        haptic(false);
+    }
+
+    /** AUTO could not build a route: notify, but leave the current route alone. */
+    private void autoRouteFailed(String message) {
+        logLine("AUTO fail " + message + " food=" + foodCell + " len=" + body.size());
+        showNotice(message, true);
+        if (sound != null) {
+            sound.playError();
+        }
+    }
+
+    /**
+     * FOLLOW: builds a waypoint route that follows the snake's tail and ends on the
+     * fruit only when the tail can still be reached after eating. Tapping FOLLOW
+     * again removes this generated route.
+     */
+    private void followRouteToFruit() {
+        if (body.isEmpty() || foodCell < 0 || tailPilot == null) {
+            followRouteFailed("FOLLOW: không có quả để tới");
+            return;
+        }
+        tailPilot.setTailChase(true);
+        int[] path = simulatePilotPath(tailPilot, Math.max(1200, COLS * rows * 2));
+        if (path == null || path.length < 2) {
+            followRouteFailed("FOLLOW: không tìm được path bám đuôi tới quả");
+            return;
+        }
+        int[] wps = safeRouteCorners(toList(path));
+        if (wps == null || wps.length == 0) {
+            followRouteFailed("FOLLOW: path không còn đường bám đuôi an toàn");
             return;
         }
         waypoints.clear();
         for (int c : wps) {
             waypoints.add(c);
         }
-        selectedWp = waypoints.isEmpty() ? -1 : 0;
+        selectedWp = 0;
+        followRouteActive = true;
+        // FOLLOW only builds the route: the player inspects it and presses MOVE.
+        manualMoving = false;
+        tickAccum = 0f;
+        dirQueue.clear();
+        logLine("FOLLOW wps=" + wps.length + " food=" + foodCell + " len=" + body.size());
+        showNotice("FOLLOW: " + wps.length + " waypoint bám đuôi — bấm MOVE", false);
+        if (sound != null) {
+            sound.playAuto();
+        }
         haptic(false);
+    }
+
+    /** Removes the waypoint route generated by FOLLOW and stops at once. */
+    private void clearFollowRoute() {
+        waypoints.clear();
+        selectedWp = -1;
+        manualMoving = false;
+        followRouteActive = false;
+        tickAccum = 0f;
+        logLine("FOLLOW cleared");
+        showNotice("FOLLOW: đã xoá route bám đuôi", false);
+        if (sound != null) {
+            sound.playTap();
+        }
+        haptic(false);
+    }
+
+    private void followRouteFailed(String message) {
+        followRouteActive = false;
+        logLine("FOLLOW fail " + message + " food=" + foodCell + " len=" + body.size());
+        showNotice(message, true);
+        if (sound != null) {
+            sound.playError();
+        }
+    }
+
+    /**
+     * Replays {@code planner} on a copy of the live snake until the fruit is eaten,
+     * and returns the walked cells (head first). The safety net mirrors step().
+     * Null when the engine gets stuck or cannot reach the fruit within {@code limit}
+     * ticks.
+     */
+    private int[] simulatePilotPath(AutoPilot planner, int limit) {
+        if (planner == null || body.isEmpty() || foodCell < 0) {
+            return null;
+        }
+        ArrayDeque<Integer> sim = new ArrayDeque<>(body);
+        int dx = dirX;
+        int dy = dirY;
+        int[] route = new int[limit + 2];
+        int n = 0;
+        Integer headObj = sim.peekFirst();
+        if (headObj == null) {
+            return null;
+        }
+        route[n++] = headObj;
+        for (int step = 0; step < limit; step++) {
+            int[] cells = new int[sim.size()];
+            int k = 0;
+            for (int c : sim) {
+                cells[k++] = c;
+            }
+            int[] d = planner.decide(cells, foodCell, dx, dy);
+            if (d == null) {
+                return null;
+            }
+            dx = d[0];
+            dy = d[1];
+            int head = cells[0];
+            int hx = head % COLS;
+            int hy = head / COLS;
+            int nx = hx + dx;
+            int ny = hy + dy;
+            int tail = cells[cells.length - 1];
+            boolean bad = nx < 0 || nx >= COLS || ny < 0 || ny >= rows;
+            if (!bad) {
+                int c = ny * COLS + nx;
+                bad = sim.contains(c) && c != tail;
+            }
+            if (bad) {
+                int[] safe = planner.fallbackDirection(cells);
+                if (safe == null) {
+                    return null;
+                }
+                dx = safe[0];
+                dy = safe[1];
+                nx = hx + dx;
+                ny = hy + dy;
+                if (nx < 0 || nx >= COLS || ny < 0 || ny >= rows) {
+                    return null;
+                }
+                int c = ny * COLS + nx;
+                if (sim.contains(c) && c != tail) {
+                    return null;
+                }
+            }
+            int ni = ny * COLS + nx;
+            boolean eats = ni == foodCell;
+            if (!eats) {
+                sim.pollLast();
+            }
+            if (sim.contains(ni)) {
+                return null;
+            }
+            sim.addFirst(ni);
+            if (n >= route.length) {
+                return null;
+            }
+            route[n++] = ni;
+            if (eats) {
+                int[] out = new int[n];
+                System.arraycopy(route, 0, out, 0, n);
+                return out;
+            }
+        }
+        return null;
     }
 
     private ArrayList<Integer> toList(int[] path) {
@@ -2473,105 +2571,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         return false;
     }
 
-    /**
-     * REPLAY: plays the recorded waypoint route like a video (the real snake does
-     * not move). Tapping the button again - or anywhere else - leaves the playback
-     * and the player continues from the same position.
-     */
-    private void replayRoute() {
-        if (replayMode) {
-            stopReplay();
-            return;
-        }
-        if (waypoints.isEmpty() || body.isEmpty()) {
-            haptic(true);
-            return;
-        }
-        ArrayList<Integer> cells = new ArrayList<>();
-        int cur = body.peekFirst();
-        cells.add(cur);
-        for (int wp : waypoints) {
-            int cx = cur % COLS;
-            int cy = cur / COLS;
-            int tx = wp % COLS;
-            int ty = wp / COLS;
-            while (cx != tx) {
-                cx += Integer.compare(tx, cx);
-                cells.add(cy * COLS + cx);
-            }
-            while (cy != ty) {
-                cy += Integer.compare(ty, cy);
-                cells.add(cy * COLS + cx);
-            }
-            cur = wp;
-        }
-        replayPath = new int[cells.size()];
-        for (int i = 0; i < cells.size(); i++) {
-            replayPath[i] = cells.get(i);
-        }
-        replayPos = 0;
-        replayAccum = 0f;
-        replayMode = true;
-        manualMoving = false;
-        tickAccum = 0f;
-        wpListOpen = false;
-        haptic(false);
-    }
-
-    private void stopReplay() {
-        replayMode = false;
-        replayAccum = 0f;
-        replayPath = new int[0];
-        replayPos = 0;
-        tickAccum = 0f;
-        haptic(false);
-    }
-
-    /** Advances the playback (called from update while replaying). */
-    private void updateReplay(float dt) {
-        if (!replayMode) {
-            return;
-        }
-        replayAccum += dt * 1000f;
-        while (replayAccum >= REPLAY_STEP_MS && replayPos < replayPath.length - 1) {
-            replayAccum -= REPLAY_STEP_MS;
-            replayPos++;
-        }
-    }
-
-    /** Translucent snake walking the recorded route (its head is at replayPos). */
-    private void drawReplaySnake(Canvas c) {
-        if (!replayMode || replayPath.length == 0) {
-            return;
-        }
-        int len = Math.min(body.size(), replayPos + 1);
-        int from = replayPos - len + 1;
-        if (len < 2) {
-            from = replayPos;
-            len = 1;
-        }
-        float half = cell / 2f;
-        replayBodyPaint.setStrokeWidth(cell * 0.60f);
-        Path gp = new Path();
-        for (int i = from; i <= replayPos; i++) {
-            int rc = replayPath[i];
-            float px = boardLeft + (rc % COLS) * cell + half;
-            float py = boardTop + (rc / COLS) * cell + half;
-            if (i == from) {
-                gp.moveTo(px, py);
-            } else {
-                gp.lineTo(px, py);
-            }
-        }
-        c.drawPath(gp, replayBodyPaint);
-        int headCell = replayPath[replayPos];
-        c.drawCircle(boardLeft + (headCell % COLS) * cell + half,
-                boardTop + (headCell / COLS) * cell + half, cell * 0.40f, replayHeadPaint);
-        c.drawText("PREVIEW " + replayPos + " / " + (replayPath.length - 1),
-                boardLeft + (headCell % COLS) * cell + half,
-                boardTop + (headCell / COLS) * cell - cell * 0.62f, replayLabelPaint);
-    }
-
     /** BFS shortest path (cells) from the head to {@code target}, body = wall. */
     private int[] findPathTo(int[] cells, int target) {
         if (cells.length == 0 || target < 0) {
@@ -2652,13 +2651,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         wpListOpen = false;
         listDragIndex = -1;
         listDragging = false;
-        replayMode = false;
-        replayPath = new int[0];
-        replayPos = 0;
-        replayAccum = 0f;
-        following = false;
-        followPicking = false;
-        followStop = -1;
+        followRouteActive = false;
     }
 
     private void spawnFood() {
@@ -2676,6 +2669,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 deadTime = 0f;
                 saveHighScore();
                 logLine("won score=" + score + " len=" + body.size());
+                if (sound != null) {
+                    sound.playWin();
+                }
                 haptic(false);
             }
             return;
@@ -2762,6 +2758,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         deaths++;
         snakeColor = (snakeColor + 1) % SNAKE_COLORS.length;
         applySnakeColor();
+        if (sound != null) {
+            if ("bite".equals(cause)) {
+                sound.playBite();
+            } else {
+                sound.playDie();
+            }
+        }
         logLine("died cause=" + cause + " score=" + score + " len=" + body.size()
                 + " deaths=" + deaths);
     }
@@ -2778,10 +2781,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private long lastDumpMs;
     private int frameCount;
     private int lastFrameCount;
+    /** Set by the DUMP button; the render thread writes the snapshot safely. */
+    private volatile boolean dumpRequested;
 
     private void dumpState() {
         long now = System.currentTimeMillis();
-        if (now - lastDumpMs < 1500L) {
+        if (!dumpRequested && now - lastDumpMs < 1500L) {
             return;
         }
         long dtMs = now - lastDumpMs;
@@ -2817,8 +2822,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 pts.append(Math.round(drawnPts[i * 2])).append(',')
                         .append(Math.round(drawnPts[i * 2 + 1]));
             }
-            w.write("state=" + state + " auto=" + autoMode + " score=" + score
-                    + " fps=" + fps
+            String stateText = "state=" + state + " auto=" + autoMode + " score=" + score
+                    + " hs=" + highScore + " snake=" + snakeColor + " fps=" + fps
                     + " deaths=" + deaths + " mode=" + mode
                     + " interval=" + Math.round(currentInterval)
                     + " food=" + foodCell
@@ -2832,6 +2837,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + "\npts=" + pts
                     + "\ncycle=" + cyclePreview()
                     + "\nwpl=" + waypointList()
+                    + "\nnotice=" + (noticeText.length() == 0 ? "-" : noticeText)
                     + "\nmove=" + Math.round(moveBtn.centerX()) + ","
                     + Math.round(moveBtn.centerY())
                     + " padUp=" + Math.round(padUpBtn.centerX()) + ","
@@ -2848,22 +2854,32 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + Math.round(padAutoBtn.centerY())
                     + " padList=" + Math.round(padListBtn.centerX()) + ","
                     + Math.round(padListBtn.centerY())
-                    + " padReplay=" + Math.round(padReplayBtn.centerX()) + ","
-                    + Math.round(padReplayBtn.centerY())
                     + " coll=" + routeCollisions().size()
                     + " stuck=0"
                     + " gap=" + (body.size() > 1 ? distFromTail()[body.peekFirst()] : -1)
                     + " list=" + (wpListOpen ? 1 : 0)
-                    + " follow=" + (following ? 1 : 0) + "/" + (followPicking ? 1 : 0)
-                    + "/" + followStop
-                    + " replay=" + (replayMode ? 1 : 0) + "/" + replayPos
-                    + "/" + replayPath.length
+                    + " follow=" + (followRouteActive ? 1 : 0)
                     + " listRect=" + Math.round(listPanel.left) + ","
                     + Math.round(listPanel.top) + ","
                     + Math.round(listPanel.right) + ","
                     + Math.round(listPanel.bottom)
                     + " rowH=" + Math.round(listRowH)
                     + " selRow=" + listDragIndex
+                    + " dumpB=" + Math.round(dumpBtn.centerX()) + ","
+                    + Math.round(dumpBtn.centerY())
+                    + " clearB=" + Math.round(clearBtn.centerX()) + ","
+                    + Math.round(clearBtn.centerY())
+                    + " settings=" + (settingsOpen ? 1 : 0)
+                    + " setBtn=" + Math.round(settingsBtn.centerX()) + ","
+                    + Math.round(settingsBtn.centerY())
+                    + " setClose=" + Math.round(settingsCloseBtn.centerX()) + ","
+                    + Math.round(settingsCloseBtn.centerY())
+                    + " setPanel=" + Math.round(settingsPanel.left) + ","
+                    + Math.round(settingsPanel.top) + ","
+                    + Math.round(settingsPanel.right) + ","
+                    + Math.round(settingsPanel.bottom)
+                    + " setSpeed=" + rectCenters(settingsSpeedBtn)
+                    + " setAlgo=" + rectCenters(settingsAlgoBtn)
                     + "\nstart=" + Math.round(startBtn.centerX()) + ","
                     + Math.round(startBtn.centerY())
                     + " autoBtn=" + Math.round(autoBtn.centerX()) + ","
@@ -2877,24 +2893,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + " zz=" + (zigzagOn ? 1 : 0)
                     + " bfs=" + (bfsOn ? 1 : 0)
                     + " tail=" + (tailChaseOn ? 1 : 0)
+                    + " rnd=" + (randomCycleOn ? 1 : 0)
+                    + " followOn=" + (followRouteActive ? 1 : 0)
                     + " ang=" + Math.round(headAngleDeg)
                     + " dir=" + dirX + "," + dirY
-                    + " tailB=" + Math.round(tailBtn.centerX()) + ","
-                    + Math.round(tailBtn.centerY())
-                    + " bfsB=" + Math.round(bfsBtn.centerX()) + ","
-                    + Math.round(bfsBtn.centerY())
-                    + " scB=" + Math.round(smartBtn.centerX()) + ","
-                    + Math.round(smartBtn.centerY())
-                    + " zzB=" + Math.round(zigBtn.centerX()) + ","
-                    + Math.round(zigBtn.centerY())
-                    + " rndB=" + Math.round(rndBtn.centerX()) + ","
-                    + Math.round(rndBtn.centerY())
                     + " rstB=" + Math.round(resetBtn.centerX()) + ","
                     + Math.round(resetBtn.centerY())
-                    + " spM=" + Math.round(speedMinusBtn.centerX()) + ","
-                    + Math.round(speedMinusBtn.centerY())
-                    + " spP=" + Math.round(speedPlusBtn.centerX()) + ","
-                    + Math.round(speedPlusBtn.centerY())
                     + " resume=" + Math.round(resumeBtn.centerX()) + ","
                     + Math.round(resumeBtn.centerY())
                     + " autoResume=" + Math.round(autoResumeBtn.centerX()) + ","
@@ -2911,14 +2915,133 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     + Math.round(pathRestartBtn.centerY())
                     + " mangoRestart=" + Math.round(mangoRestartBtn.centerX()) + ","
                     + Math.round(mangoRestartBtn.centerY())
-                    + "\n");
+                    + "\n";
+            w.write(stateText);
             w.close();
+            if (dumpRequested) {
+                dumpRequested = false;
+                writeDumpFile(stateText);
+            }
         } catch (Exception ignored) {
             // diagnostics only
         }
     }
 
+    /** Writes the full user-triggered snapshot to dump.txt and a timestamped copy. */
+    private void writeDumpFile(String stateText) {
+        try {
+            java.io.File dir = getContext().getExternalFilesDir(null);
+            if (dir == null) {
+                showNotice("DUMP: không có thư mục lưu", true);
+                return;
+            }
+            String stamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss",
+                    java.util.Locale.US).format(new java.util.Date());
+            String extra = "dump=user\n"
+                    + "time=" + new java.util.Date() + "\n"
+                    + "model=" + Build.MODEL + "\n"
+                    + "sdk=" + Build.VERSION.SDK_INT + "\n"
+                    + "highScore=" + highScore + "\n"
+                    + "snakeColor=" + snakeColor + "\n"
+                    + "followActive=" + followRouteActive + "\n"
+                    + "activeToggle=" + activeToggleName() + "\n"
+                    + "lastAutoMode=" + lastAutoMode + "\n"
+                    + "rndPending=" + rndCyclePending + "\n"
+                    + "fallbackPilot=" + (rndFallbackPilot != null) + "\n"
+                    + "bodyAll=" + allBodyCells() + "\n"
+                    + "waypointsAll=" + waypointList() + "\n"
+                    + "routeAll=" + routeCellsString() + "\n"
+                    + "collisions=" + collisionCells() + "\n";
+            String full = extra + stateText;
+            writeTextFile(new java.io.File(dir, "dump.txt"), full);
+            writeTextFile(new java.io.File(dir, "dump_" + stamp + ".txt"), full);
+            logLine("DUMP " + stamp);
+            showNotice("Đã lưu dump.txt", false);
+            if (sound != null) {
+                sound.playTap();
+            }
+        } catch (Exception e) {
+            showNotice("DUMP: lỗi lưu file", true);
+        }
+    }
+
+    private static void writeTextFile(java.io.File file, String text) throws java.io.IOException {
+        java.io.FileWriter w = new java.io.FileWriter(file, false);
+        try {
+            w.write(text);
+        } finally {
+            w.close();
+        }
+    }
+
+    /** Every body cell (head first) without the state.txt 90-cell cap. */
+    private String allBodyCells() {
+        StringBuilder sb = new StringBuilder();
+        for (int c : body) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(c);
+        }
+        return sb.length() == 0 ? "-" : sb.toString();
+    }
+
+    /** Every cell of the currently planned route, head first. */
+    private String routeCellsString() {
+        ArrayList<Integer> route = routeCellsTo(waypoints.size() - 1);
+        StringBuilder sb = new StringBuilder();
+        for (int c : route) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(c);
+        }
+        return sb.length() == 0 ? "-" : sb.toString();
+    }
+
+    /** Cells where the planned route would hit the body. */
+    private String collisionCells() {
+        ArrayList<Integer> hits = routeCollisions();
+        StringBuilder sb = new StringBuilder();
+        for (int c : hits) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(c);
+        }
+        return sb.length() == 0 ? "-" : sb.toString();
+    }
+
+    private String activeToggleName() {
+        if (tailChaseOn) {
+            return "TAIL";
+        }
+        if (bfsOn) {
+            return "BFS";
+        }
+        if (smartShortcuts) {
+            return "SC";
+        }
+        if (zigzagOn) {
+            return "ZZ";
+        }
+        if (randomCycleOn) {
+            return "RND";
+        }
+        return "OFF";
+    }
+
+    /** Shows a short message in the bottom hint line for a few seconds. */
+    private void showNotice(String text, boolean error) {
+        noticeText = text == null ? "" : text;
+        noticeError = error;
+        noticeUntilMs = android.os.SystemClock.uptimeMillis() + 3200L;
+    }
+
     private void haptic(final boolean strong) {
+        if (sound != null && !strong) {
+            sound.playTap();
+        }
         post(new Runnable() {
             @Override
             public void run() {
@@ -2937,6 +3060,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     public boolean onTouchEvent(MotionEvent e) {
         float x = e.getX();
         float y = e.getY();
+        if (settingsOpen) {
+            return handleSettingsTouch(e);
+        }
         if (wpListOpen) {
             // The waypoint list dialog owns every touch while it is open.
             return handleListTouch(e, x, y);
@@ -2947,6 +3073,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 downY = y;
                 gestureConsumed = false;
                 tapOnPause = pauseBtn.contains(x, y);
+                return true;
+            case MotionEvent.ACTION_POINTER_DOWN:
+            case MotionEvent.ACTION_POINTER_UP:
+                // A second finger is never a tap: ignore the whole gesture.
+                gestureConsumed = true;
+                return true;
+            case MotionEvent.ACTION_CANCEL:
+                gestureConsumed = true;
                 return true;
             case MotionEvent.ACTION_MOVE: {
                 if (gestureConsumed) {
@@ -2972,6 +3106,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 if (!gestureConsumed && Math.abs(dx) < slop && Math.abs(dy) < slop) {
                     onTap(x, y);
                 }
+                gestureConsumed = true;
                 return true;
             }
             default:
@@ -2980,107 +3115,51 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void onTap(float x, float y) {
-        // Speed − / + work in every state; they never touch the run itself.
-        if (speedMinusBtn.contains(x, y)) {
-            changeSpeed(-1);
-            return;
-        }
-        if (speedPlusBtn.contains(x, y)) {
-            changeSpeed(1);
-            return;
-        }
-        if (resetBtn.contains(x, y)) {
-            // RST (pause menu): restart the current run in the same mode.
-            restartRun();
-            return;
-        }
-        if (tailBtn.contains(x, y)) {
-            // TAIL: safe search - greedy BFS plus tail chasing, no Hamiltonian cycle.
-            tailChaseOn = !tailChaseOn;
-            if (tailChaseOn) {
-                bfsOn = false;
-                randomCycleOn = false;
-            }
-            stallTicks = 0;
-            haptic(false);
-            if (autoMode) {
-                restartGame(MODE_AUTO);
-            }
-            return;
-        }
-        if (bfsBtn.contains(x, y)) {
-            // BFS: autoplay switches to the verified engine - shortest path to the
-            // fruit, simulated over the whole snake and only taken when formally
-            // proven safe; otherwise it walks the Hamiltonian cycle/path. The run
-            // restarts so the new engine drives it from the first move.
-            bfsOn = !bfsOn;
-            if (bfsOn) {
-                randomCycleOn = false;   // one autoplay engine at a time
-                tailChaseOn = false;
-            }
-            haptic(false);
-            if (autoMode) {
-                restartGame(MODE_AUTO);
-            }
-            return;
-        }
-        if (smartBtn.contains(x, y)) {
-            // SC: allow safe shortcuts that leave the Hamiltonian cycle.
-            smartShortcuts = !smartShortcuts;
-            applyAiToggles();
+        if (state == STATE_RUNNING && dumpBtn.contains(x, y)) {
+            dumpRequested = true;
+            showNotice("Đang lưu dump...", false);
             haptic(false);
             return;
         }
-        if (zigBtn.contains(x, y)) {
-            // ZZ: zig-zag detour while the head is next to the tail.
-            zigzagOn = !zigzagOn;
-            applyAiToggles();
-            haptic(false);
-            return;
-        }
-        if (rndBtn.contains(x, y)) {
-            // RND: autoplay uses a fresh random Hamiltonian cycle each run instead of
-            // the fixed snake. Toggling it restarts the run on the new cycle.
-            randomCycleOn = !randomCycleOn;
-            if (randomCycleOn) {
-                bfsOn = false;   // one autoplay engine at a time
-                tailChaseOn = false;
-                if (randomPilot != null) {
-                    randomPilot.reshuffleRandomMerge();
-                }
-            }
-            if (autoMode) {
-                restartGame(MODE_AUTO);
-            }
-            haptic(false);
+        if (state == STATE_RUNNING && !autoMode && mode == MODE_MANUAL
+                && !waypoints.isEmpty() && clearBtn.contains(x, y)) {
+            clearWaypoints();
             return;
         }
         switch (state) {
             case STATE_READY:
-                if (autoBtn.contains(x, y)) {
+                if (startBtn.contains(x, y)) {
+                    startGame(MODE_MANUAL);
+                } else if (autoBtn.contains(x, y)) {
                     startGame(MODE_AUTO);
+                } else if (settingsBtn.contains(x, y)) {
+                    openSettings();
                 } else {
                     startGame(MODE_MANUAL);
                 }
                 return;
             case STATE_DEAD:
             case STATE_WON:
+                // Restart only from the card's buttons: a stray tap on the board must
+                // not silently start a new run and erase the final score.
                 if (autoRestartBtn.contains(x, y)) {
                     restartGame(MODE_AUTO);
                 } else if (restartBtn.contains(x, y)) {
                     restartGame(MODE_MANUAL);
-                } else {
-                    restartGame(autoMode ? MODE_AUTO : MODE_MANUAL);
                 }
                 return;
             case STATE_PAUSED:
                 // AUTOPLAY switches the AI back on for the same run; CHƠI LẠI starts
                 // a fresh run with the toggles that are active now; anything else
                 // simply continues the run.
-                if (autoResumeBtn.contains(x, y)) {
+                if (resumeBtn.contains(x, y)) {
+                    resumeGame();
+                } else if (autoResumeBtn.contains(x, y)) {
                     resumeMode(MODE_AUTO);
                 } else if (resetBtn.contains(x, y)) {
                     restartRun();
+                } else if (settingsBtn.contains(x, y)) {
+                    openSettings();
                 } else {
                     resumeGame();
                 }
@@ -3101,6 +3180,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     autoMode = false;
                     clearRoute();
                     tickAccum = 0f;
+                    if (sound != null) {
+                        sound.playTap();
+                    }
                 }
                 return;
             default:
@@ -3173,17 +3255,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         // The ghost is drawn on top of the real snake: with a short route the
         // ghost shares cells with the body and would otherwise be hidden.
         if (!autoMode && mode == MODE_MANUAL && state == STATE_RUNNING) {
-            if (replayMode) {
-                drawReplaySnake(c);
-            } else {
-                drawGhostSnake(c);
-            }
+            drawGhostSnake(c);
             drawWaypointMarkers(c);
         }
         drawParticles(c);
         drawPopups(c);
         drawHud(c);
-        drawBottomBar(c);
+        // The control strip belongs to the play screen only: keep the home and
+        // pause menus clean (their own buttons live on the overlays).
+        if (state == STATE_RUNNING) {
+            drawBottomBar(c);
+        }
         if (!autoMode && mode == MODE_MANUAL && state == STATE_RUNNING) {
             drawWaypointPad(c);
         }
@@ -3192,6 +3274,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         if (state != STATE_RUNNING) {
             drawOverlay(c);
+        }
+        if (settingsOpen) {
+            drawSettings(c);
         }
     }
 
@@ -3219,20 +3304,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     /** Waypoint dots with their order numbers (drawn on top of the snake/ghost). */
     private void drawWaypointMarkers(Canvas c) {
-        if (waypoints.isEmpty() && followStop < 0) {
-            return;
-        }
-        float half = cell / 2f;
-        if (followStop >= 0) {
-            // Stop point chosen for FOLLOW.
-            float fx = boardLeft + (followStop % COLS) * cell + half;
-            float fy = boardTop + (followStop / COLS) * cell + half;
-            c.drawCircle(fx, fy, cell * 0.34f, wpSelPaint);
-        }
         if (waypoints.isEmpty()) {
             return;
         }
-        boolean[] broken = brokenWaypoints();
+        float half = cell / 2f;
         for (int i = 0; i < waypoints.size(); i++) {
             int wp = waypoints.get(i);
             float tx = boardLeft + (wp % COLS) * cell + half;
@@ -3242,12 +3317,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             c.drawCircle(tx, ty, r, wpFillPaint);
             c.drawCircle(tx, ty, r, sel ? wpSelPaint : wpStrokePaint);
             c.drawText(String.valueOf(i + 1), tx, ty + dp(3.4f), wpTextPaint);
-            if (broken[i]) {
-                // The route runs over this point before its turn: mark it broken.
-                float k = cell * 0.42f;
-                c.drawLine(tx - k, ty - k, tx + k, ty + k, padDelPaint);
-                c.drawLine(tx + k, ty - k, tx - k, ty + k, padDelPaint);
-            }
         }
         // Cells where the planned route would hit the snake's own body.
         for (int hit : routeCollisions()) {
@@ -3260,44 +3329,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
     }
 
-    /**
-     * Marks the waypoints the route cannot reach: each leg is searched with the same
-     * shortest-path rule the snake uses, so a marker means "the snake really cannot
-     * get there" instead of "the straight leg crosses another waypoint".
-     */
-    private boolean[] brokenWaypoints() {
-        int n = waypoints.size();
-        boolean[] broken = new boolean[n];
-        if (n == 0 || body.isEmpty()) {
-            return broken;
-        }
-        int[] cells = cellsToArray();
-        int cur = body.peekFirst();
-        for (int i = 0; i < n; i++) {
-            int to = waypoints.get(i);
-            if (to != cur && findPathFrom(cells, cur, to) == null) {
-                broken[i] = true;
-                continue;
-            }
-            cur = to;
-        }
-        return broken;
-    }
-
-    /** Labels of the broken waypoints (1-based) for the hint line. */
-    private String brokenLabel() {
-        boolean[] broken = brokenWaypoints();
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < broken.length; i++) {
-            if (broken[i]) {
-                if (sb.length() > 0) {
-                    sb.append(',');
-                }
-                sb.append(i + 1);
-            }
-        }
-        return sb.toString();
-    }
 
     /**
      * Walks the planned route with a simulated snake and returns the cells where
@@ -3408,41 +3439,52 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         c.drawCircle(tpx, tpy, cell * 0.24f, ghostHeadPaint);
     }
 
-    /** Cells from the head to the given waypoint, following the L-shaped route. */
+    /** Next cell of the player's straight leg: horizontal first, then vertical. */
+    private int directStepCell(int from, int to) {
+        int fx = from % COLS;
+        int fy = from / COLS;
+        int tx = to % COLS;
+        int ty = to / COLS;
+        if (fx != tx) {
+            return fy * COLS + fx + Integer.compare(tx, fx);
+        }
+        if (fy != ty) {
+            return (fy + Integer.compare(ty, fy)) * COLS + fx;
+        }
+        return -1;
+    }
+
+    /** Appends the straight L-shaped leg {@code from -> to} (target included). */
+    private void appendDirectLeg(ArrayList<Integer> out, int from, int to) {
+        int cur = from;
+        int guard = COLS * rows + 1;
+        while (cur != to && guard-- > 0) {
+            int nxt = directStepCell(cur, to);
+            if (nxt < 0) {
+                break;
+            }
+            out.add(nxt);
+            cur = nxt;
+        }
+    }
+
+    /**
+     * Cells from the head through the waypoints, using only the straight
+     * horizontal/vertical legs of the player's setup - no path finding.
+     */
     private ArrayList<Integer> routeCellsTo(int wpIndex) {
         ArrayList<Integer> out = new ArrayList<>();
         if (body.isEmpty() || wpIndex < 0 || wpIndex >= waypoints.size()) {
             return out;
         }
-        int[] cells = cellsToArray();
         int cur = body.peekFirst();
         out.add(cur);
         for (int i = 0; i <= wpIndex; i++) {
             int target = waypoints.get(i);
             if (target != cur) {
-                int[] leg = findPathFrom(cells, cur, target);
-                if (leg != null && leg.length > 1) {
-                    for (int k = 1; k < leg.length; k++) {
-                        out.add(leg[k]);
-                    }
-                } else {
-                    // Sealed in: still show the straight leg, so the player can see
-                    // which waypoint is the problem (it gets the broken marker).
-                    int cx = cur % COLS;
-                    int cy = cur / COLS;
-                    int tx = target % COLS;
-                    int ty = target / COLS;
-                    while (cx != tx) {
-                        cx += Integer.compare(tx, cx);
-                        out.add(cy * COLS + cx);
-                    }
-                    while (cy != ty) {
-                        cy += Integer.compare(ty, cy);
-                        out.add(cy * COLS + cx);
-                    }
-                }
+                appendDirectLeg(out, cur, target);
+                cur = target;
             }
-            cur = target;
         }
         return out;
     }
@@ -3451,16 +3493,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private void drawWaypointPad(Canvas c) {
         // The strip background is painted by drawBottomBar (before the hint,
         // MOVE and pause button) so those stay on top of it.
-        // FOLLOW (bottom-left cell): pick a body point to stop at, then walk
-        // along the tail.
-        boolean followOn = following || followPicking;
+        // FOLLOW (bottom-left cell): generated tail-following route to a safe fruit.
+        boolean followOn = followRouteActive;
         c.drawRoundRect(padFollowBtn, dp(12f), dp(12f),
                 followOn ? wpFillPaint : padBtnPaint);
         c.drawRoundRect(padFollowBtn, dp(12f), dp(12f), padBtnStrokePaint);
         float oldSize = padLabelPaint.getTextSize();
         padLabelPaint.setTextSize(dp(9f));
         padLabelPaint.setColor(followOn ? 0xFFFFD479 : 0xFFC8FFDD);
-        c.drawText(following ? "STOP" : "FOLLOW",
+        c.drawText(followRouteActive ? "STOP" : "FOLLOW",
                 padFollowBtn.centerX(), padFollowBtn.centerY() + dp(3.2f), padLabelPaint);
         padLabelPaint.setTextSize(oldSize);
         padLabelPaint.setColor(0xE6C8FFDD);
@@ -3471,29 +3512,188 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             drawPadButton(c, padRightBtn, 3);
             drawPadButton(c, padDelBtn, 4);
             drawPadButton(c, padListBtn, 5);
-            drawPadButton(c, padAutoBtn, 6);
         }
-        // REPLAY pill under the pad
-        boolean has = !waypoints.isEmpty();
-        c.drawRoundRect(padReplayBtn, dp(10f), dp(10f),
-                replayMode ? wpFillPaint : padBtnPaint);
-        c.drawRoundRect(padReplayBtn, dp(10f), dp(10f),
-                replayMode ? replayHeadPaint : padBtnStrokePaint);
-        float old = padLabelPaint.getTextSize();
-        padLabelPaint.setTextSize(dp(11f));
-        padLabelPaint.setColor(has ? 0xFFC8FFDD : 0x6693A7C4);
-        String label;
-        if (replayMode) {
-            label = "THOÁT PREVIEW";
-        } else {
-            label = "PREVIEW  (" + waypoints.size() + ")";
-        }
-        c.drawText(label, padReplayBtn.centerX(), padReplayBtn.centerY() + dp(4f),
-                padLabelPaint);
-        padLabelPaint.setTextSize(old);
-        padLabelPaint.setColor(0xE6C8FFDD);
+        // AUTO is useful with an empty route too: keep the centre button visible
+        // even when no waypoint is selected (the arrows stay hidden then).
+        drawPadButton(c, padAutoBtn, 6);
     }
 
+    private void setSpeedIndex(int index) {
+        int next = Math.max(0, Math.min(SPEEDS.length - 1, index));
+        speedIndex = next;
+        getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putInt(KEY_SPEED, speedIndex).apply();
+        haptic(false);
+    }
+
+
+    /** Centers of a settings option grid, for adb-driven UI checks. */
+    private static String rectCenters(RectF[] rects) {
+        StringBuilder sb = new StringBuilder();
+        for (RectF r : rects) {
+            if (r == null || r.isEmpty()) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(';');
+            }
+            sb.append(Math.round(r.centerX())).append(',').append(Math.round(r.centerY()));
+        }
+        return sb.length() == 0 ? "-" : sb.toString();
+    }
+
+    private int algorithmIndex() {
+        if (tailChaseOn) {
+            return ALG_TAIL;
+        }
+        if (bfsOn) {
+            return ALG_BFS;
+        }
+        if (smartShortcuts) {
+            return ALG_SC;
+        }
+        if (zigzagOn) {
+            return ALG_ZZ;
+        }
+        if (randomCycleOn) {
+            return ALG_RND;
+        }
+        return ALG_OFF;
+    }
+
+    /** Exactly one algorithm may be selected, or none (ALG_OFF). */
+    private void selectAlgorithm(int which) {
+        AutoPilot previous = activePilot();
+        tailChaseOn = which == ALG_TAIL;
+        bfsOn = which == ALG_BFS;
+        smartShortcuts = which == ALG_SC;
+        zigzagOn = which == ALG_ZZ;
+        randomCycleOn = which == ALG_RND;
+        rndCyclePending = false;
+        rndFallbackPilot = null;
+        if (randomCycleOn && (state == STATE_RUNNING || state == STATE_PAUSED)
+                && autoMode && randomPilot != null
+                && !randomPilot.bodyOnCycle(cellsToArray())) {
+            rndCyclePending = true;
+            rndFallbackPilot = previous != null ? previous : pilot;
+        }
+        if (tailChaseOn) {
+            stallTicks = 0;
+        }
+        applyAiToggles();
+        haptic(false);
+    }
+    /* ------------------------------------------------------------------ */
+    /* Settings (speed + algorithm)                                       */
+    /* ------------------------------------------------------------------ */
+
+    private void openSettings() {
+        settingsOpen = true;
+        layoutSettings();
+        haptic(false);
+    }
+
+    private void closeSettings() {
+        settingsOpen = false;
+        haptic(false);
+    }
+
+    private void layoutSettings() {
+        int w = getWidth();
+        int h = getHeight();
+        float panelW = Math.min(w - dp(24f), dp(360f));
+        float panelH = Math.min(h - dp(80f), dp(420f));
+        float cx = w / 2f;
+        float cy = h / 2f;
+        settingsPanel.set(cx - panelW / 2f, cy - panelH / 2f,
+                cx + panelW / 2f, cy + panelH / 2f);
+
+        float padX = dp(16f);
+        float innerW = panelW - padX * 2f;
+        float gap = dp(8f);
+        float rowH = dp(40f);
+        float closeH = dp(42f);
+        float needed = dp(66f) + 2f * (rowH + gap) + dp(24f) + dp(10f)
+                + 2f * (rowH + gap) + closeH + dp(24f);
+        if (needed > panelH) {
+            rowH = Math.max(dp(30f), rowH - (needed - panelH) / 4f);
+        }
+        float colW = (innerW - gap * 2f) / 3f;
+
+        float speedTop = settingsPanel.top + dp(66f);
+        for (int i = 0; i < settingsSpeedBtn.length; i++) {
+            int col = i % 3;
+            int row = i / 3;
+            float x = settingsPanel.left + padX + col * (colW + gap);
+            float y = speedTop + row * (rowH + gap);
+            settingsSpeedBtn[i].set(x, y, x + colW, y + rowH);
+        }
+        settingsAlgoLabelY = speedTop + 2f * (rowH + gap) + dp(22f);
+        float algoTop = settingsAlgoLabelY + dp(10f);
+        for (int i = 0; i < settingsAlgoBtn.length; i++) {
+            int col = i % 3;
+            int row = i / 3;
+            float x = settingsPanel.left + padX + col * (colW + gap);
+            float y = algoTop + row * (rowH + gap);
+            settingsAlgoBtn[i].set(x, y, x + colW, y + rowH);
+        }
+        float closeW = dp(140f);
+        settingsCloseBtn.set(cx - closeW / 2f, settingsPanel.bottom - dp(12f) - closeH,
+                cx + closeW / 2f, settingsPanel.bottom - dp(12f));
+    }
+
+    private void drawSettings(Canvas c) {
+        layoutSettings();
+        c.drawRect(0f, 0f, getWidth(), getHeight(), settingsDimPaint);
+        c.drawRoundRect(settingsPanel, dp(20f), dp(20f), cardPaint);
+        c.drawRoundRect(settingsPanel, dp(20f), dp(20f), cardStroke);
+
+        float cx = settingsPanel.centerX();
+        c.drawText("CÀI ĐẶT", cx, settingsPanel.top + dp(30f), cardTitlePaint);
+        c.drawText("TỐC ĐỘ", cx, settingsPanel.top + dp(56f), readyHintPaint);
+        for (int i = 0; i < settingsSpeedBtn.length; i++) {
+            drawToggle(c, settingsSpeedBtn[i], SPEED_LABELS[i], i == speedIndex);
+        }
+        c.drawText("THUẬT TOÁN AUTO", cx, settingsAlgoLabelY, readyHintPaint);
+        int alg = algorithmIndex();
+        for (int i = 0; i < settingsAlgoBtn.length; i++) {
+            drawToggle(c, settingsAlgoBtn[i], ALGO_LABELS[i], i == alg);
+        }
+        drawSecondaryButton(c, settingsCloseBtn, "ĐÓNG", false);
+    }
+
+    private boolean handleSettingsTouch(MotionEvent e) {
+        if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+            float x = e.getX();
+            float y = e.getY();
+            for (int i = 0; i < settingsSpeedBtn.length; i++) {
+                if (settingsSpeedBtn[i].contains(x, y)) {
+                    setSpeedIndex(i);
+                    return true;
+                }
+            }
+            for (int i = 0; i < settingsAlgoBtn.length; i++) {
+                if (settingsAlgoBtn[i].contains(x, y)) {
+                    selectAlgorithm(i);
+                    return true;
+                }
+            }
+            if (settingsCloseBtn.contains(x, y) || !settingsPanel.contains(x, y)) {
+                closeSettings();
+            }
+        }
+        return true;
+    }
+
+    private void drawToggle(Canvas c, RectF r, String label, boolean on) {
+        c.drawRoundRect(r, dp(8f), dp(8f), on ? secondaryFillPaint : padBgPaint);
+        c.drawRoundRect(r, dp(8f), dp(8f), on ? secondaryStrokePaint : pauseStroke);
+        labelPaint.setLetterSpacing(0.02f);
+        labelPaint.setColor(on ? 0xFFB9FFD8 : 0xFF8DA0BF);
+        c.drawText(label, r.centerX(), r.centerY() + dp(3.4f), labelPaint);
+        labelPaint.setLetterSpacing(0.16f);
+        labelPaint.setColor(0xFF8DA0BF);
+    }
     private void drawPadButton(Canvas c, RectF r, int icon) {
         c.drawRoundRect(r, dp(12f), dp(12f), padBtnPaint);
         c.drawRoundRect(r, dp(12f), dp(12f), padBtnStrokePaint);
@@ -3996,17 +4196,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             c.drawRoundRect(padPanel, dp(16f), dp(16f), padBgPaint);
         }
         String hint;
-        String broken = "";
         boolean collision = false;
         if (autoMode) {
             hint = "AI đang chơi — chạm badge để tự điều khiển";
         } else if (mode == MODE_MANUAL) {
-            if (following) {
-                hint = followStop >= 0
-                        ? "FOLLOW: bám đuôi, dừng ở điểm đã chọn"
-                        : "FOLLOW: đang bám đuôi";
-            } else if (followPicking) {
-                hint = "Chạm lên thân rắn để chọn điểm dừng";
+            if (followRouteActive) {
+                hint = "FOLLOW: route đã tạo — bấm MOVE để chạy, FOLLOW để xoá";
             } else if (manualMoving) {
                 hint = "Bấm DỪNG để sửa route";
             } else if (waypoints.isEmpty()) {
@@ -4014,11 +4209,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             } else {
                 hint = "Bấm MOVE để chạy";
             }
-            broken = brokenLabel();
-            if (broken.length() > 0 && !following && !followPicking) {
-                hint = "BROKEN tại #" + broken + "  •  không có đường tới";
-            } else if (broken.isEmpty() && !following && !followPicking
-                    && !waypoints.isEmpty()) {
+            if (!waypoints.isEmpty()) {
                 ArrayList<Integer> hits = routeCollisions();
                 if (!hits.isEmpty()) {
                     int hitCell = hits.get(0);
@@ -4030,50 +4221,68 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         } else {
             hint = "Vuốt để điều khiển";
         }
+        boolean noticeActive = noticeText.length() > 0
+                && android.os.SystemClock.uptimeMillis() < noticeUntilMs;
+        if (noticeActive) {
+            hint = noticeText;
+            collision = false;
+        }
         hint += "  •  Chết: " + deaths;
-        hintPaint.setColor(broken.length() > 0 || collision ? 0xFFFF8FA3 : 0xFF647699);
+        int hintColor = noticeActive
+                ? (noticeError ? 0xFFFF8FA3 : 0xFFB9FFD8)
+                : (collision ? 0xFFFF8FA3 : 0xFF647699);
+        hintPaint.setColor(hintColor);
         c.drawText(hint, boardLeft + dp(2f), hintTop, hintPaint);
         hintPaint.setColor(0xFF647699);
         if (!autoMode && mode == MODE_MANUAL) {
             drawMoveButton(c);
         }
+        drawDumpButton(c);
+        if (!autoMode && mode == MODE_MANUAL && !waypoints.isEmpty()) {
+            drawClearButton(c);
+        }
         drawPauseButton(c);
-        drawAiToggles(c);
-        drawSpeedButtons(c);
     }
 
-    /** Speed − / + with the current multiplier between them. */
-    /** AI toggles: BFS (verified algorithm), SC, ZZ, RND (random cycle). */
-    private void drawAiToggles(Canvas c) {
-        drawToggle(c, tailBtn, "TAIL", tailChaseOn);
-        drawToggle(c, bfsBtn, "BFS", bfsOn);
-        drawToggle(c, smartBtn, "SC", smartShortcuts);
-        drawToggle(c, zigBtn, "ZZ", zigzagOn);
-        drawToggle(c, rndBtn, "RND", randomCycleOn);
+    /** CLEAR WP pill: drops the whole waypoint route in one tap. */
+    private void drawClearButton(Canvas c) {
+        c.drawRoundRect(clearBtn, dp(10f), dp(10f), padBtnPaint);
+        c.drawRoundRect(clearBtn, dp(10f), dp(10f), padBtnStrokePaint);
+        float oldSize = padLabelPaint.getTextSize();
+        padLabelPaint.setTextSize(dp(10f));
+        padLabelPaint.setColor(0xFFFFC8D2);
+        c.drawText("CLEAR WP", clearBtn.centerX(), clearBtn.centerY() + dp(3.4f),
+                padLabelPaint);
+        padLabelPaint.setTextSize(oldSize);
+        padLabelPaint.setColor(0xE6C8FFDD);
     }
 
-    private void drawToggle(Canvas c, RectF r, String label, boolean on) {
-        c.drawRoundRect(r, dp(8f), dp(8f), on ? secondaryFillPaint : padBgPaint);
-        c.drawRoundRect(r, dp(8f), dp(8f), on ? secondaryStrokePaint : pauseStroke);
-        labelPaint.setLetterSpacing(0.02f);
-        labelPaint.setColor(on ? 0xFFB9FFD8 : 0xFF8DA0BF);
-        c.drawText(label, r.centerX(), r.centerY() + dp(3.4f), labelPaint);
-        labelPaint.setLetterSpacing(0.16f);
-        labelPaint.setColor(0xFF8DA0BF);
+    /** Removes every waypoint and stops the current route. */
+    private void clearWaypoints() {
+        int removed = waypoints.size();
+        waypoints.clear();
+        selectedWp = -1;
+        manualMoving = false;
+        followRouteActive = false;
+        wpListOpen = false;
+        tickAccum = 0f;
+        logLine("CLEAR wps=" + removed);
+        showNotice("Đã xoá " + removed + " waypoint", false);
+        haptic(false);
     }
 
-    private void drawSpeedButtons(Canvas c) {
-        drawSecondaryButton(c, speedMinusBtn, "−", false);
-        drawSecondaryButton(c, speedPlusBtn, "+", false);
-        String label = String.format(java.util.Locale.US, "%.1f×", speedFactor());
-        float ls = labelPaint.getLetterSpacing();
-        labelPaint.setLetterSpacing(0.02f);
-        labelPaint.setColor(0xFFB9FFD8);
-        c.drawText(label, (speedMinusBtn.right + speedPlusBtn.left) / 2f,
-                speedMinusBtn.centerY() + dp(3.6f), labelPaint);
-        labelPaint.setLetterSpacing(ls);
-        labelPaint.setColor(0xFF8DA0BF);
+    /** Small DUMP pill: saves a full diagnostic snapshot for the user. */
+    private void drawDumpButton(Canvas c) {
+        c.drawRoundRect(dumpBtn, dp(12f), dp(12f), padBtnPaint);
+        c.drawRoundRect(dumpBtn, dp(12f), dp(12f), padBtnStrokePaint);
+        float oldSize = padLabelPaint.getTextSize();
+        padLabelPaint.setTextSize(dp(9f));
+        padLabelPaint.setColor(0xFFC8FFDD);
+        c.drawText("DUMP", dumpBtn.centerX(), dumpBtn.centerY() + dp(3.2f), padLabelPaint);
+        padLabelPaint.setTextSize(oldSize);
+        padLabelPaint.setColor(0xE6C8FFDD);
     }
+
 
     private void drawPauseButton(Canvas c) {
         c.drawCircle(pauseCx, pauseCy, pauseR, pauseBgPaint);
@@ -4119,68 +4328,57 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
     }
 
+    /**
+     * One vertical menu shared by the home and pause screens. The speed and
+     * algorithm rows cycle their value on tap, so there is no second menu page.
+     */
+    /**
+     * Home and pause share one vertical menu style. CÀI ĐẶT opens the settings
+     * screen; the action buttons keep the same width, gap and height on both.
+     */
     private void drawReadyOverlay(Canvas c) {
+        layoutVerticalMenu(true, 3);
         float cx = boardRect.centerX();
-        float cy = boardRect.centerY();
-        float bob = (float) Math.sin(animTime * 2.1f) * dp(5f);
-
         readyTitlePaint.setShadowLayer(dp(18f), 0f, dp(2f), 0x8835D07F);
-        c.drawText("SNAKE", cx, cy - dp(168f) + bob, readyTitlePaint);
+        c.drawText("SNAKE", cx, startBtn.top - dp(54f), readyTitlePaint);
         readyTitlePaint.clearShadowLayer();
-
-        c.drawText("Chạm để bắt đầu", cx, cy - dp(120f), readySubPaint);
-
-        // Two ways to play: CHƠI (manual waypoints) and AUTOPLAY (the cycle AI, whose
-        // variant is picked by the SC / ZZ / RND toggles above the speed buttons).
-        float gap = dp(12f);
-        float bh = Math.min(dp(56f), Math.max(dp(38f), (boardH * 0.30f - gap) / 2f));
-        float bw = Math.min(boardW * 0.86f, dp(300f));
-        float bx = cx - bw / 2f;
-        float top = cy - dp(96f);
-        startBtn.set(bx, top, bx + bw, top + bh);
-        autoBtn.set(bx, top + bh + gap, bx + bw, top + 2f * bh + gap);
-        pathBtn.setEmpty();
-        mangoBtn.setEmpty();
 
         drawPrimaryButton(c, startBtn, "CHƠI", false);
         drawSecondaryButton(c, autoBtn, "AUTOPLAY", false);
-
-        float hintY = top + 2f * bh + gap + dp(24f);
-        c.drawText("CHƠI: chạm board đặt waypoint rồi bấm MOVE", cx, hintY, readyHintPaint);
-        c.drawText("AUTOPLAY: AI đi chu trình Hamilton — thắng 100%", cx,
-                hintY + dp(22f), readyHintPaint);
-        c.drawText("SC: shortcut an toàn · ZZ: zig-zag · RND: chu trình ngẫu nhiên", cx,
-                hintY + dp(44f), readyHintPaint);
+        drawSecondaryButton(c, settingsBtn, "CÀI ĐẶT", false);
     }
 
     private void drawPausedOverlay(Canvas c) {
+        layoutVerticalMenu(false, 4);
         float cx = boardRect.centerX();
-        float cy = boardRect.centerY();
-
-        c.drawText("TẠM DỪNG", cx, cy - dp(110f), pausedTitlePaint);
-
-        // Row 1: continue / switch the AUTOPLAY AI back on.
-        // Row 2: CHƠI LẠI - restart the run with the toggles that are active now.
-        float gap = dp(10f);
-        float bw = Math.min((boardW * 0.88f - gap) / 2f, dp(170f));
-        float bh = dp(50f);
-        float bx = cx - (bw * 2f + gap) / 2f;
-        float by = cy - dp(76f);
-        resumeBtn.set(bx, by, bx + bw, by + bh);
-        autoResumeBtn.set(bx + bw + gap, by, bx + 2f * bw + gap, by + bh);
-        resetBtn.set(bx, by + bh + gap, bx + 2f * bw + gap, by + 2f * bh + gap);
-        pathResumeBtn.setEmpty();
-        mangoResumeBtn.setEmpty();
+        c.drawText("TẠM DỪNG", cx, resumeBtn.top - dp(38f), pausedTitlePaint);
 
         drawPrimaryButton(c, resumeBtn, "TIẾP TỤC", false);
         drawSecondaryButton(c, autoResumeBtn, "AUTOPLAY", false);
         drawSecondaryButton(c, resetBtn, "CHƠI LẠI", false);
-
-        String now = mode == MODE_AUTO ? "AUTOPLAY" : "CHƠI";
-        c.drawText("Đang ở chế độ " + now, cx, by + 2f * bh + gap + dp(28f),
-                readyHintPaint);
+        drawSecondaryButton(c, settingsBtn, "CÀI ĐẶT", false);
     }
 
+    /** Vertical stack used by both menus (home: 3 rows, pause: 4 rows). */
+    private void layoutVerticalMenu(boolean home, int count) {
+        float gap = dp(10f);
+        float bh = Math.min(dp(46f),
+                Math.max(dp(30f), (boardH * 0.70f - (count - 1) * gap) / count));
+        float bw = Math.min(boardW * 0.86f, dp(320f));
+        float total = count * bh + (count - 1) * gap;
+        float bx = boardRect.centerX() - bw / 2f;
+        float top = boardRect.centerY() - total / 2f + dp(6f);
+        if (home) {
+            startBtn.set(bx, top, bx + bw, top + bh);
+            autoBtn.set(bx, top + bh + gap, bx + bw, top + 2f * bh + gap);
+            settingsBtn.set(bx, top + 2f * (bh + gap), bx + bw, top + 3f * bh + 2f * gap);
+        } else {
+            resumeBtn.set(bx, top, bx + bw, top + bh);
+            autoResumeBtn.set(bx, top + bh + gap, bx + bw, top + 2f * bh + gap);
+            resetBtn.set(bx, top + 2f * (bh + gap), bx + bw, top + 3f * bh + 2f * gap);
+            settingsBtn.set(bx, top + 3f * (bh + gap), bx + bw, top + 4f * bh + 3f * gap);
+        }
+    }
     private void drawDeadOverlay(Canvas c, boolean won) {
         float cx = boardRect.centerX();
         float cy = boardRect.centerY();
@@ -4226,8 +4424,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         drawPrimaryButton(c, restartBtn, "CHƠI LẠI", false);
         drawSecondaryButton(c, autoRestartBtn, "AUTOPLAY", false);
 
-        c.drawText("hoặc chạm ra ngoài để chơi lại", cx, by + bh + dp(22f),
-                readyHintPaint);
+        c.drawText("chọn CHƠI LẠI / AUTOPLAY để chơi ván mới", cx,
+                by + bh + dp(22f), readyHintPaint);
 
         c.restore();
     }

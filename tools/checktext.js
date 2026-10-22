@@ -21,7 +21,7 @@ const expected = [
   'Chạm để tiếp tục',
   'Đang ở chế độ',
   'TIẾP TỤC',
-  'hoặc chạm ra ngoài để chơi lại',
+  'chọn CHƠI LẠI / AUTOPLAY để chơi ván mới',
 ];
 
 let bad = 0;
